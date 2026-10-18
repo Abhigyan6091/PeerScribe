@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PeerScribe | Tactical Clinical Mesh</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <style>
+    /* Tactical Layout Styles */
+    .app-container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding-bottom: 96px;
+    }
+
+    /* Top Tactical Bar */
+    .tactical-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-surface);
+      border: var(--border-thick);
+      border-radius: var(--border-radius-tactical);
+      padding: 10px 14px;
+    }
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: var(--font-weight-heavy);
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--mesh-active);
+      box-shadow: 0 0 8px var(--mesh-active);
+      animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .mode-badge {
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-weight: 800;
+      font-size: 0.8rem;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: var(--mode-emergency);
+      color: #FFF;
+      cursor: pointer;
+    }
+
+    /* Operation Info Header */
+    .operation-card {
+      background: var(--bg-surface);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: var(--border-radius-tactical);
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .op-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .op-meta {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    .mesh-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      background: rgba(0, 245, 212, 0.15);
+      color: var(--mesh-active);
+      border: 1px solid var(--mesh-active);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    /* Active Casualty Intake Card */
+    .casualty-intake-card {
+      background: var(--bg-surface);
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: var(--border-radius-tactical);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .patient-id-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .phonetic-id {
+      font-size: 1.8rem;
+      font-weight: var(--font-weight-heavy);
+      letter-spacing: 1px;
+    }
+    .identicon-box {
+      width: 48px;
+      height: 48px;
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid #FFF;
+    }
+
+    /* Two-Tap Triage Buttons (Fitts's Law Optimized) */
+    .triage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .triage-btn {
+      min-height: var(--touch-target-large);
+      border-radius: var(--border-radius-tactical);
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: 1px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      border: none;
+      cursor: pointer;
+      color: #FFF;
+      transition: transform 0.08s ease, filter 0.08s ease;
+      box-shadow: var(--shadow-tactical);
+    }
+    .triage-btn:active {
+      transform: scale(0.96);
+      filter: brightness(1.2);
+    }
+    .triage-sub {
+      font-size: 0.75rem;
+      font-weight: 600;
+      opacity: 0.85;
+      margin-top: 2px;
+    }
+
+    .btn-red { background: var(--triage-red); }
+    .btn-yellow { background: var(--triage-yellow); color: #000; }
+    .btn-green { background: var(--triage-green); color: #000; }
+    .btn-black { background: var(--triage-black); }
+
+    /* Push-To-Talk Voice Bar */
+    .ptt-bar {
+      min-height: var(--touch-target-large);
+      background: var(--bg-surface-elevated);
+      border: 2px dashed rgba(255,255,255,0.3);
+      border-radius: var(--border-radius-tactical);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: #FFF;
+      transition: background 0.15s ease;
+    }
+    .ptt-bar:active, .ptt-bar.recording {
+      background: rgba(255, 26, 26, 0.25);
+      border-color: var(--triage-red);
+      color: var(--triage-red);
+    }
+
+    /* Semantic Divergence Alert Banner */
+    .divergence-banner {
+      display: none;
+      background: var(--divergence-alert-bg);
+      border: 2px solid var(--divergence-alert);
+      border-radius: var(--border-radius-tactical);
+      padding: 14px;
+      color: #FFF;
+      animation: alertPulse 1.2s infinite;
+      cursor: pointer;
+    }
+    @keyframes alertPulse {
+      0%, 100% { border-color: var(--divergence-alert); box-shadow: 0 0 10px rgba(255,0,85,0.4); }
+      50% { border-color: #FFF; box-shadow: 0 0 20px rgba(255,0,85,0.8); }
+    }
+    .divergence-title {
+      font-weight: 900;
+      font-size: 1.05rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .divergence-desc {
+      font-size: 0.85rem;
+      color: #FFB3C6;
+      margin-top: 4px;
+    }
+
+    /* Casualty Feed */
+    .section-header {
+      font-size: 0.85rem;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-top: 8px;
+    }
+    .casualty-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .casualty-item {
+      background: var(--bg-surface);
+      border-left: 6px solid var(--triage-red);
+      border-radius: 4px;
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .cas-id {
+      font-weight: 800;
+      font-size: 1.1rem;
+    }
+    .cas-vitals {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    /* Emergency Wipe Modal / Bottom Bar */
+    .footer-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(9, 10, 13, 0.95);
+      backdrop-filter: blur(8px);
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding: 10px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .wipe-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 0, 85, 0.5);
+      color: #FF0055;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    /* Modal Styles */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-box {
+      background: var(--bg-surface);
+      border: 2px solid var(--divergence-alert);
+      border-radius: var(--border-radius-tactical);
+      padding: 20px;
+      max-width: 480px;
+      width: 100%;
+      color: #FFF;
+    }
+    .conflict-row {
+      background: rgba(255,255,255,0.05);
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-size: 0.85rem;
+    }
+    .resolve-btn {
+      width: 100%;
+      min-height: 52px;
+      background: var(--triage-red);
+      color: #FFF;
+      border: none;
+      border-radius: 4px;
+      font-weight: 800;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- Top Tactical Header -->
+    <header class="tactical-bar">
+      <div class="brand-title">
+        <div class="pulse-dot"></div>
+        PEERSCRIBE
+      </div>
+      <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()">EMERGENCY</div>
+    </header>
+
+    <!-- Operation Context Card -->
+    <section class="operation-card">
+      <div>
+        <div class="op-name">District 4 Disaster Response #001</div>
+        <div class="op-meta">Sector Geohash: <strong style="color:#FFF;">u15ek200</strong> | 27.7172° N, 85.3240° E</div>
+      </div>
+      <div class="mesh-badge" id="meshStatus">3 Peers Active</div>
+    </section>
+
+    <!-- Semantic Divergence Alert Banner -->
+    <div id="divergenceBanner" class="divergence-banner" onclick="openDivergenceModal()">
+      <div class="divergence-title">
+        🚨 CLINICAL DIVERGENCE DETECTED
+      </div>
+      <div class="divergence-desc" id="divergenceDesc">
+        Medic A and Medic B recorded opposing triage levels for RED-PANTHER-04. Human sign-off required.
+      </div>
+    </div>
+
+    <!-- Active Casualty Intake Station -->
+    <section class="casualty-intake-card">
+      <div class="patient-id-row">
+        <div>
+          <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">Active Casualty</span>
+          <div class="phonetic-id" id="activePatientId">RED-PANTHER-04</div>
+        </div>
+        <div class="identicon-box" id="activeIdenticon">
+          <!-- 4x4 Identicon SVG -->
+          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/><rect x="0" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="24" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="12" y="12" width="12" height="12" fill="#FF1A1A"/><rect x="36" y="24" width="12" height="12" fill="#FF1A1A"/><rect x="0" y="36" width="12" height="12" fill="#FF1A1A"/></svg>
+        </div>
+      </div>
+
+      <!-- Two-Tap START Triage Buttons -->
+      <div class="triage-grid">
+        <button class="triage-btn btn-red" onclick="assignTriage('RED')">
+          RED
+          <span class="triage-sub">IMMEDIATE</span>
+        </button>
+        <button class="triage-btn btn-yellow" onclick="assignTriage('YELLOW')">
+          YELLOW
+          <span class="triage-sub">DELAYED</span>
+        </button>
+        <button class="triage-btn btn-green" onclick="assignTriage('GREEN')">
+          GREEN
+          <span class="triage-sub">MINOR</span>
+        </button>
+        <button class="triage-btn btn-black" onclick="assignTriage('BLACK')">
+          BLACK
+          <span class="triage-sub">EXPECTANT</span>
+        </button>
+      </div>
+
+      <!-- Push to Talk Voice Observation -->
+      <div class="ptt-bar" id="pttButton" onclick="toggleVoiceRecording()">
+        🎤 <span id="pttText">Push To Talk Clinical Observation</span>
+      </div>
+    </section>
+
+    <!-- Casualty Feed -->
+    <div class="section-header">Active Sector Casualties (Sorted by Severity)</div>
+    <div class="casualty-list" id="casualtyList">
+      <div class="casualty-item" style="border-color: var(--triage-red);">
+        <div>
+          <div class="cas-id" style="color: var(--triage-red);">RED-PANTHER-04</div>
+          <div class="cas-vitals">RR: 34/min | Radial Pulse: Absent | Mental: Altered | 1m ago</div>
+        </div>
+        <div style="font-weight: 800; color: var(--triage-red);">IMM</div>
+      </div>
+      <div class="casualty-item" style="border-color: var(--triage-yellow);">
+        <div>
+          <div class="cas-id" style="color: var(--triage-yellow);">YELLOW-OTTER-12</div>
+          <div class="cas-vitals">RR: 20/min | Radial Pulse: Normal | Mental: Alert | 4m ago</div>
+        </div>
+        <div style="font-weight: 800; color: var(--triage-yellow);">DEL</div>
+      </div>
+      <div class="casualty-item" style="border-color: var(--triage-green);">
+        <div>
+          <div class="cas-id" style="color: var(--triage-green);">GREEN-WOLF-02</div>
+          <div class="cas-vitals">Ambulatory | Minor laceration left forearm | 9m ago</div>
+        </div>
+        <div style="font-weight: 800; color: var(--triage-green);">MIN</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Tactical Bar -->
+  <footer class="footer-bar">
+    <div style="font-size: 0.75rem; color: var(--text-secondary);">
+      BLE Mesh: <strong style="color: #FFF;">Connected (Hop 1/15)</strong> | CRDT Replicas: <strong style="color: #FFF;">3 Synced</strong>
+    </div>
+    <button class="wipe-btn" onclick="triggerEmergencyWipe()">EMERGENCY WIPE</button>
+  </footer>
+
+  <!-- Semantic Divergence Resolution Modal -->
+  <div class="modal-overlay" id="divergenceModal">
+    <div class="modal-box">
+      <div style="font-size: 1.2rem; font-weight: 900; color: var(--divergence-alert); margin-bottom: 8px;">
+        🚨 Resolve Clinical Disagreement
+      </div>
+      <div style="font-size: 0.85rem; color: var(--text-secondary);">
+        CRDT state converged technically, but two disconnected medics logged conflicting observations:
+      </div>
+
+      <div class="conflict-row">
+        <strong>Medic A (Alpha Team • 10:02):</strong>
+        <div>Diagnosed: <span style="color: var(--triage-red); font-weight: 800;">RED (Immediate)</span></div>
+        <div style="font-size: 0.8rem; color: var(--text-muted);">Observation: Respiratory rate 34, weak pulse.</div>
+      </div>
+
+      <div class="conflict-row">
+        <strong>Medic B (Bravo Team • 10:03):</strong>
+        <div>Diagnosed: <span style="color: var(--triage-yellow); font-weight: 800;">YELLOW (Delayed)</span></div>
+        <div style="font-size: 0.8rem; color: var(--text-muted);">Observation: Bleeding temporarily controlled with tourniquet.</div>
+      </div>
+
+      <button class="resolve-btn" onclick="resolveConflict('RED')">CONFIRM AS RED (IMMEDIATE)</button>
+      <button class="resolve-btn" style="background: var(--triage-yellow); color: #000; margin-top: 8px;" onclick="resolveConflict('YELLOW')">CONFIRM AS YELLOW (DELAYED)</button>
+      <button class="wipe-btn" style="width: 100%; margin-top: 10px;" onclick="closeDivergenceModal()">CANCEL</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

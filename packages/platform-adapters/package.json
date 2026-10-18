@@ -1,0 +1,18 @@
+{
+  "name": "@peerscribe/platform-adapters",
+  "version": "1.0.0-alpha.1",
+  "description": "Hardware and environment adapters with multi-node BLE mesh simulator",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node --experimental-strip-types tests/ble_mesh.test.ts"
+  },
+  "keywords": [
+    "ble",
+    "mesh",
+    "gnss",
+    "hardware-adapter"
+  ],
+  "author": "PeerScribe Open Source Initiative",
+  "license": "Apache-2.0"
+}

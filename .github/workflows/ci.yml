@@ -1,0 +1,67 @@
+name: Continuous Integration & Verification
+
+on:
+  push:
+    branches: [ main, beta, 'release/**' ]
+  pull_request:
+    branches: [ main, beta ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Linter
+        run: npm run lint --if-present
+
+      - name: Typecheck Core Engine & Modules
+        run: npm run typecheck --if-present
+
+  cross-platform-test-matrix:
+    name: Test Suite (${{ matrix.os }} - Node ${{ matrix.node-version }})
+    needs: lint-and-typecheck
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        node-version: [ '20', '22' ]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Core & Platform Unit Tests
+        run: npm test --if-present -- --coverage
+
+      - name: Upload Test Coverage (Ubuntu Only)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: coverage/
+          retention-days: 14

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+build-manifest/
+release-dist/
+release-final/
+*.apk
+*.aab
+*.exe
+*.msi
+*.AppImage
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs & Temporary
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.system_generated/
+scratch/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment & Keys
+.env
+.env.local
+*.pem
+*.key
+*.asc

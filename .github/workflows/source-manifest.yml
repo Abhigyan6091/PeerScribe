@@ -1,0 +1,46 @@
+name: BitChat-Standard Cryptographic Source Manifest
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  generate-source-manifest:
+    name: Generate & Verify Cryptographic Source Manifest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository with Full History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate Source Manifest (SHA-256 for Tracked Files)
+        run: |
+          mkdir -p build-manifest
+          COMMIT_HASH=$(git rev-parse HEAD)
+          TREE_HASH=$(git rev-parse HEAD^{tree})
+          TAG_NAME=${GITHUB_REF_NAME:-"untagged"}
+          
+          echo "Generating cryptographic manifest for tag: $TAG_NAME (commit: $COMMIT_HASH)"
+          node scripts/generate-manifest.js > build-manifest/SOURCE_MANIFEST.json
+          
+          # Also generate plain-text checksums for standard sha256sum validation
+          git ls-files | while read -r file; do
+            if [ -f "$file" ]; then
+              sha256sum "$file"
+            fi
+          done > build-manifest/SHA256SUMS.txt
+
+      - name: Upload Cryptographic Manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest-${{ github.ref_name || 'latest' }}
+          path: build-manifest/
+          retention-days: 90
