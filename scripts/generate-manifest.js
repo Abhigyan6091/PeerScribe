@@ -4,10 +4,10 @@
  * a verifiable SHA-256 manifest alongside commit and tree hashes.
  */
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { execSync } = require('child_process');
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 
 function getGitOutput(cmd) {
   try {

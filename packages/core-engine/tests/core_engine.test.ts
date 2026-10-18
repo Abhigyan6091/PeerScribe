@@ -34,7 +34,18 @@ import {
   analyzeSemanticSafety,
   applyDivergenceAnalysis,
   resolveDivergence,
-  EmergencyWipeService
+  EmergencyWipeService,
+  BloomFilter,
+  DtnOutboxQueue,
+  BundlePriority,
+  generateX25519KeyPair,
+  NoiseHandshakeSession,
+  createNostrMeshEvent,
+  decryptNostrMeshEvent,
+  NostrGatewayService,
+  extractStructuredObservation,
+  extractAndEvaluateTriage,
+  MobilityParticleFilter
 } from '../src/index.ts';
 
 test('Identity & Cryptography: Ed25519 signing and verification', () => {
@@ -316,3 +327,168 @@ test('Security: Emergency Wipe zeroization service', () => {
   const isAllZeroes = sensitiveBuffer.every(byte => byte === 0);
   assert.equal(isAllZeroes, true);
 });
+
+test('BitChat Network: 128-byte Anti-Entropy Bloom Filter deduplication', () => {
+  const bloom = new BloomFilter();
+  assert.equal(bloom.sizeBytes, 128);
+
+  bloom.add('bundle_sync_001');
+  bloom.add('bundle_sync_002');
+  bloom.add('bundle_sync_003');
+
+  assert.equal(bloom.contains('bundle_sync_001'), true);
+  assert.equal(bloom.contains('bundle_sync_002'), true);
+  assert.equal(bloom.contains('bundle_sync_003'), true);
+  assert.equal(bloom.contains('bundle_sync_999_unknown'), false);
+
+  // Verify buffer serialization
+  const buffer = bloom.toBuffer();
+  assert.equal(buffer.length, 128);
+  const deserialized = BloomFilter.fromBuffer(buffer);
+  assert.equal(deserialized.contains('bundle_sync_001'), true);
+  assert.equal(deserialized.contains('bundle_sync_999_unknown'), false);
+});
+
+test('BitChat Network: DTN Store-and-Forward Outbox with priority sorting', () => {
+  const outbox = new DtnOutboxQueue();
+
+  outbox.enqueue({
+    bundleId: 'routine_bundle_01',
+    operationId: 'op_test',
+    priority: BundlePriority.ROUTINE,
+    hopCount: 1,
+    maxHops: 10,
+    createdAt: Date.now() - 5000,
+    ttlMs: 60000,
+    payload: Buffer.from('routine_delta')
+  });
+
+  outbox.enqueue({
+    bundleId: 'sos_bundle_99',
+    operationId: 'op_test',
+    priority: BundlePriority.CRITICAL_SOS,
+    hopCount: 2,
+    maxHops: 10,
+    createdAt: Date.now() - 1000,
+    ttlMs: 60000,
+    payload: Buffer.from('CRITICAL_SOS_PAYLOAD')
+  });
+
+  // Neighbor Bloom filter has seen routine_bundle_01, but NOT sos_bundle_99
+  const neighborBloom = new BloomFilter();
+  neighborBloom.add('routine_bundle_01');
+
+  const needed = outbox.getBundlesNeededByNeighbor(neighborBloom);
+  assert.equal(needed.length, 1);
+  assert.equal(needed[0].bundleId, 'sos_bundle_99');
+  assert.equal(needed[0].priority, BundlePriority.CRITICAL_SOS);
+});
+
+test('BitChat Network: Noise XX Mutual Authentication Handshake & PFS Transport', () => {
+  const medicAStatic = generateX25519KeyPair();
+  const medicBStatic = generateX25519KeyPair();
+
+  const initiator = new NoiseHandshakeSession('INITIATOR', medicAStatic);
+  const responder = new NoiseHandshakeSession('RESPONDER', medicBStatic);
+
+  // Handshake Message 1: -> e
+  const msg1 = initiator.createMessage1();
+  assert.equal(msg1.length, 32);
+
+  // Handshake Message 2: <- e, ee, s, es
+  const msg2 = responder.processMessage1AndCreateMessage2(msg1);
+  assert.ok(msg2.length >= 80);
+
+  // Handshake Message 3: -> s, se (Initiator establishes session)
+  const { message3, session: initiatorSession } = initiator.processMessage2AndCreateMessage3(msg2);
+  assert.ok(message3.length >= 48);
+
+  // Responder establishes session
+  const responderSession = responder.processMessage3(message3);
+
+  // Verify mutually authenticated static public keys
+  assert.equal(initiatorSession.peerStaticPublicKey, medicBStatic.publicKey.toString('hex'));
+  assert.equal(responderSession.peerStaticPublicKey, medicAStatic.publicKey.toString('hex'));
+
+  // Test bidirectional encrypted transport with ChaCha20-Poly1305 and PFS
+  const plaintextFromA = Buffer.from('CONFIDENTIAL_PATIENT_VITALS_DELTA:RED');
+  const encryptedA = initiatorSession.sendCipher.encrypt(plaintextFromA);
+  const decryptedAtB = responderSession.receiveCipher.decrypt(encryptedA);
+  assert.deepEqual(decryptedAtB, plaintextFromA);
+
+  const plaintextFromB = Buffer.from('CONFIDENTIAL_MEDIC_SIGN_OFF:AUTHORIZED');
+  const encryptedB = responderSession.sendCipher.encrypt(plaintextFromB);
+  const decryptedAtA = initiatorSession.receiveCipher.decrypt(encryptedB);
+  assert.deepEqual(decryptedAtA, plaintextFromB);
+});
+
+test('BitChat Nostr: Kind 20042 Mesh Sync Bundle packaging and gateway auto-promotion', () => {
+  const opId = 'op_himalaya_01';
+  const geohash = 'u15ek200';
+  const sharedSecret = Buffer.alloc(32, 7);
+  const nodePrivKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+  const rawWirePayload = Buffer.from('COMPRESSED_CRDT_BUNDLE_DATA_FOR_NOSTR_MESH');
+  const nostrEvent = createNostrMeshEvent(opId, geohash, rawWirePayload, sharedSecret, nodePrivKey);
+
+  assert.equal(nostrEvent.kind, 20042);
+  assert.ok(nostrEvent.tags.some(t => t[0] === 'g' && t[1] === geohash));
+  assert.ok(nostrEvent.tags.some(t => t[0] === 't' && t[1] === 'peerscribe_mesh_sync'));
+
+  // Test Gateway Service
+  const gateway = new NostrGatewayService();
+  assert.equal(gateway.isGatewayActive, false);
+
+  gateway.setInternetConnectivity(true);
+  assert.equal(gateway.isGatewayActive, true);
+
+  // Ingest Nostr event at remote gateway replica
+  const decryptedPayload = gateway.ingestRelayEvent(nostrEvent, sharedSecret);
+  assert.ok(decryptedPayload !== null);
+  assert.deepEqual(decryptedPayload, rawWirePayload);
+
+  // Ingesting duplicate event returns null (deduplicated)
+  const duplicateResult = gateway.ingestRelayEvent(nostrEvent, sharedSecret);
+  assert.equal(duplicateResult, null);
+});
+
+test('Edge AI: Natural speech extraction to structured observation and START triage evaluation', () => {
+  const speechTranscript = 'Adult male, breathing rate is 34, no radial pulse, open femur fracture, patient is confused';
+  const { observation, triageResult } = extractAndEvaluateTriage(speechTranscript);
+
+  // Verify structured factual extraction
+  assert.equal(observation.ageGroup, 'ADULT');
+  assert.equal(observation.respirationRate, 34);
+  assert.equal(observation.radialPulsePresent, false);
+  assert.equal(observation.mentalStatus, 'ALTERED');
+  assert.ok(observation.injuries.includes('open femur fracture'));
+
+  // Verify deterministic triage decision: RR 34 > 30 -> RED
+  assert.equal(triageResult.category, 'RED');
+  assert.equal(triageResult.protocol, 'START_ADULT_v1.0');
+  assert.ok(triageResult.rationale.includes('Respiratory compromise'));
+});
+
+test('Probabilistic Location: Particle filter mobility propagation and sighting contraction', () => {
+  const lkpLat = 27.7172;
+  const lkpLon = 85.3240;
+  const filter = new MobilityParticleFilter(lkpLat, lkpLon, 300, 20);
+
+  const initialEstimates = filter.estimateSearchContours();
+  assert.ok(initialEstimates.radius90PercentMeters < 50);
+
+  // Propagate 10 minutes forward in time (600s) -> Swarm expands
+  filter.propagate(600);
+  const expandedEstimates = filter.estimateSearchContours();
+  assert.ok(expandedEstimates.radius90PercentMeters > initialEstimates.radius90PercentMeters);
+
+  // Opportunistic peer sighting recorded 40m northeast
+  const sightingLat = lkpLat + 0.0003;
+  const sightingLon = lkpLon + 0.0003;
+  filter.observeSighting(sightingLat, sightingLon, 25);
+
+  const contractedEstimates = filter.estimateSearchContours();
+  // Search area contracts significantly around the sighting point
+  assert.ok(contractedEstimates.radius90PercentMeters < expandedEstimates.radius90PercentMeters);
+});
+
