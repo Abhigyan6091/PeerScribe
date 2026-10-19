@@ -309,6 +309,45 @@
       cursor: pointer;
       margin-top: 12px;
     }
+    .tele-tab {
+      background: transparent;
+      border: 1px solid #2A2E3D;
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tele-tab:hover {
+      background: rgba(255,255,255,0.05);
+    }
+    .tele-tab.active {
+      background: rgba(0, 245, 212, 0.12);
+      border-color: #00F5D4;
+      color: #00F5D4;
+    }
+    .tele-card {
+      border: 1px solid #1F2433;
+      border-left: 3px solid #00F5D4;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 8px;
+      background: #0E1118;
+      font-family: monospace;
+    }
+    .tele-field {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+    .tele-field span {
+      color: #8C92A4;
+    }
+    .tele-field strong {
+      color: #E2E8F0;
+    }
   </style>
 </head>
 <body>
@@ -406,6 +445,31 @@
         <div style="font-weight: 800; color: var(--triage-green);">MIN</div>
       </div>
     </div>
+
+    <!-- Real-time Tactical Mesh Telemetry & BitChat Wire Inspector -->
+    <section class="telemetry-section" style="background: var(--bg-surface); border: var(--border-thick); border-radius: var(--border-radius-tactical); padding: 12px; margin-top: 14px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleTelemetry()">
+        <div style="font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #00E676; box-shadow: 0 0 6px #00E676;"></span>
+          LIVE MESH TELEMETRY &amp; PACKET INSPECTOR
+        </div>
+        <div id="telemetryToggleText" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 700;">[HIDE ▲]</div>
+      </div>
+
+      <div id="telemetryBody" style="margin-top: 12px;">
+        <div style="display: flex; gap: 6px; border-bottom: 1px solid #2A2E3D; padding-bottom: 8px; overflow-x: auto;">
+          <button class="tele-tab active" id="tabWire" onclick="switchTeleTab('wire')">BitChat Wire Packets (<span id="wireCount">0</span>)</button>
+          <button class="tele-tab" id="tabAudit" onclick="switchTeleTab('audit')">SQLite WAL Audit (<span id="auditCount">0</span>)</button>
+          <button class="tele-tab" id="tabDtn" onclick="switchTeleTab('dtn')">DTN Outbox (<span id="dtnCount">0</span>)</button>
+          <button class="tele-tab" id="tabNostr" onclick="switchTeleTab('nostr')">Nostr Kind 20042</button>
+          <button class="tele-tab" id="tabConsole" onclick="switchTeleTab('console')">Console Stream</button>
+        </div>
+
+        <div id="teleContent" style="margin-top: 10px; font-family: monospace; font-size: 0.78rem; max-height: 220px; overflow-y: auto; background: #07090D; padding: 10px; border-radius: 6px; border: 1px solid #1C202C;">
+          <div style="color: #6B7285;">Awaiting live mesh sync packets...</div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <!-- Bottom Tactical Bar -->

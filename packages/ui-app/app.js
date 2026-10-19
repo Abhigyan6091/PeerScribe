@@ -282,6 +282,153 @@ async function triggerEmergencyWipe() {
   }
 }
 
-// Initialize on page load
+// -------------------------------------------------------------
+// Live Telemetry & BitChat Packet Inspector
+// -------------------------------------------------------------
+let currentTeleTab = 'wire';
+let isTelemetryVisible = true;
+let wirePacketsCache = [];
+let auditTrailCache = [];
+let dtnBundlesCache = [];
+let nostrEventsCache = [];
+let consoleLogsCache = [];
+
+function toggleTelemetry() {
+  const body = document.getElementById('telemetryBody');
+  const toggleText = document.getElementById('telemetryToggleText');
+  isTelemetryVisible = !isTelemetryVisible;
+  if (body) body.style.display = isTelemetryVisible ? 'block' : 'none';
+  if (toggleText) toggleText.innerText = isTelemetryVisible ? '[HIDE ▲]' : '[SHOW ▼]';
+}
+
+function switchTeleTab(tab) {
+  currentTeleTab = tab;
+  ['wire', 'audit', 'dtn', 'nostr', 'console'].forEach(t => {
+    const btn = document.getElementById(`tab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
+  renderTelemetryView();
+}
+
+async function refreshTelemetry() {
+  if (!isBackendConnected) return;
+  try {
+    const [wireRes, auditRes, dtnRes, nostrRes, actRes] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/telemetry/packets`).then(r => r.json()).catch(() => []),
+      fetch(`${API_BASE}/api/v1/telemetry/audit`).then(r => r.json()).catch(() => []),
+      fetch(`${API_BASE}/api/v1/telemetry/dtn`).then(r => r.json()).catch(() => []),
+      fetch(`${API_BASE}/api/v1/telemetry/nostr`).then(r => r.json()).catch(() => []),
+      fetch(`${API_BASE}/api/v1/telemetry/activity`).then(r => r.json()).catch(() => [])
+    ]);
+
+    wirePacketsCache = wireRes;
+    auditTrailCache = auditRes;
+    dtnBundlesCache = dtnRes;
+    nostrEventsCache = nostrRes;
+    consoleLogsCache = actRes;
+
+    const wireCountEl = document.getElementById('wireCount');
+    if (wireCountEl) wireCountEl.innerText = wirePacketsCache.length;
+    const auditCountEl = document.getElementById('auditCount');
+    if (auditCountEl) auditCountEl.innerText = auditTrailCache.length;
+    const dtnCountEl = document.getElementById('dtnCount');
+    if (dtnCountEl) dtnCountEl.innerText = dtnBundlesCache.length;
+
+    renderTelemetryView();
+  } catch (err) {
+    console.warn('[Telemetry] Refresh failed:', err);
+  }
+}
+
+function renderTelemetryView() {
+  const container = document.getElementById('teleContent');
+  if (!container) return;
+
+  if (currentTeleTab === 'wire') {
+    if (wirePacketsCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">Awaiting BitChat wire packet transmissions... Triage a patient above to see 32-byte framing.</div>';
+      return;
+    }
+    container.innerHTML = wirePacketsCache.map(p => `
+      <div class="tele-card" style="border-left-color: ${p.priority === 'CRITICAL_SOS' ? '#FF1A1A' : '#00F5D4'};">
+        <div class="tele-field">
+          <strong style="color: #00F5D4;">[${p.packetType}] ${p.bundleId}</strong>
+          <span style="color: #94A3B8;">${p.timeStr}</span>
+        </div>
+        <div class="tele-field"><span>Priority:</span> <strong style="color: ${p.priority === 'CRITICAL_SOS' ? '#FF1A1A' : '#FFB800'};">${p.priority}</strong></div>
+        <div class="tele-field"><span>32B Header Magic:</span> <code>${p.magic}</code> | CRC-32: <code>${p.crc32Hex}</code></div>
+        <div class="tele-field"><span>Sector Geohash:</span> <code>${p.geohash}</code> | Hop Limit: <code>${p.hopCount}/${p.maxTtl}</code></div>
+        <div class="tele-field"><span>Raw Wire Hex:</span> <code style="color: #38BDF8; font-size: 0.72rem; word-break: break-all;">${p.wireHexPreview}... (${p.wireSize} bytes)</code></div>
+      </div>
+    `).join('');
+  } else if (currentTeleTab === 'audit') {
+    if (auditTrailCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">No clinical audit trail rows in SQLite yet.</div>';
+      return;
+    }
+    container.innerHTML = auditTrailCache.map(r => `
+      <div class="tele-card" style="border-left-color: #38BDF8;">
+        <div class="tele-field">
+          <strong style="color: #38BDF8;">${r.action_type}</strong>
+          <span>${r.timeStr}</span>
+        </div>
+        <div class="tele-field"><span>Entry ID:</span> <code>${r.entry_id}</code></div>
+        <div class="tele-field"><span>Patient:</span> <code>${r.patient_id}</code> | Actor: <code>${r.node_id}</code></div>
+        <div style="color: #CBD5E1; font-size: 0.72rem; margin-top: 4px; background: rgba(0,0,0,0.4); padding: 4px; border-radius: 3px;">
+          ${JSON.stringify(r.details)}
+        </div>
+      </div>
+    `).join('');
+  } else if (currentTeleTab === 'dtn') {
+    if (dtnBundlesCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">DTN Outbox is empty. All bundles forwarded or acknowledged.</div>';
+      return;
+    }
+    container.innerHTML = dtnBundlesCache.map(b => `
+      <div class="tele-card" style="border-left-color: #F59E0B;">
+        <div class="tele-field">
+          <strong style="color: #F59E0B;">Bundle: ${b.bundleId}</strong>
+          <span>${b.timeStr}</span>
+        </div>
+        <div class="tele-field"><span>Priority:</span> <strong style="color: #EF4444;">${b.priority}</strong></div>
+        <div class="tele-field"><span>Hop Count:</span> ${b.hopCount} / ${b.maxHops} | Wire Payload: ${b.payloadBytes} bytes</div>
+      </div>
+    `).join('');
+  } else if (currentTeleTab === 'nostr') {
+    if (nostrEventsCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">Awaiting Nostr Kind 20042 mesh sync events.</div>';
+      return;
+    }
+    container.innerHTML = nostrEventsCache.map(n => `
+      <div class="tele-card" style="border-left-color: #EC4899;">
+        <div class="tele-field">
+          <strong style="color: #EC4899;">Nostr Event Kind ${n.kind}</strong>
+          <span>${new Date(n.created_at * 1000).toLocaleTimeString()}</span>
+        </div>
+        <div class="tele-field"><span>Event ID:</span> <code>${n.id}</code></div>
+        <div class="tele-field"><span>Tags:</span> <code>${JSON.stringify(n.tags)}</code></div>
+        <div class="tele-field"><span>Encrypted AEAD:</span> <code style="color: #CBD5E1; font-size: 0.7rem; word-break: break-all;">${n.content.substring(0, 48)}...</code></div>
+      </div>
+    `).join('');
+  } else if (currentTeleTab === 'console') {
+    if (consoleLogsCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">Awaiting live subsystem activity logs...</div>';
+      return;
+    }
+    container.innerHTML = consoleLogsCache.map(l => `
+      <div style="margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px dotted #1E293B;">
+        <span style="color: #64748B;">[${l.timeStr}]</span>
+        <strong style="color: #00F5D4;">[${l.subsystem}]</strong>
+        <span style="color: #E2E8F0;">${l.title}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// Initial render
 renderCasualties();
-initBackendConnection();
+initBackendConnection().then(() => {
+  refreshTelemetry();
+  // Poll telemetry every 3s
+  setInterval(refreshTelemetry, 3000);
+});

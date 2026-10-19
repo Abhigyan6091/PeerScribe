@@ -34,8 +34,11 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
   node.on('modeChanged', (data) => broadcastSse('modeChanged', data));
   node.on('sightingContracted', (data) => broadcastSse('sightingContracted', data));
   node.on('emergencyWiped', (data) => broadcastSse('emergencyWiped', data));
+  node.on('activityLogged', (data) => broadcastSse('activityLogged', data));
 
   const server = http.createServer(async (req, res) => {
+    const startTime = Date.now();
+
     // Enable CORS for tactical mobile and local dev
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -67,6 +70,10 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
     };
 
     const sendJson = (statusCode: number, data: any) => {
+      const duration = Date.now() - startTime;
+      if (!pathname.startsWith('/api/v1/telemetry') && pathname !== '/health' && pathname !== '/api/v1/events') {
+        console.log(`\x1b[32m[HTTP ${statusCode}]\x1b[0m ${req.method} ${pathname} (${duration}ms)`);
+      }
       res.writeHead(statusCode, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     };
@@ -172,6 +179,46 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         return;
       }
 
+      // --- Telemetry & Packet Inspector Endpoints ---
+      if (pathname === '/api/v1/telemetry/packets' && req.method === 'GET') {
+        sendJson(200, node.recentWirePackets);
+        return;
+      }
+
+      if (pathname === '/api/v1/telemetry/nostr' && req.method === 'GET') {
+        sendJson(200, node.recentNostrEvents);
+        return;
+      }
+
+      if (pathname === '/api/v1/telemetry/dtn' && req.method === 'GET') {
+        sendJson(200, node.db.listPendingDtnBundles(node.currentOperationId).map(b => ({
+          bundleId: b.bundleId,
+          priority: b.priority === 3 ? 'CRITICAL_SOS' : 'CLINICAL_DELTA',
+          hopCount: b.hopCount,
+          maxHops: b.maxHops,
+          createdAt: b.createdAt,
+          timeStr: new Date(b.createdAt).toLocaleTimeString(),
+          payloadBytes: b.payload.length
+        })));
+        return;
+      }
+
+      if (pathname === '/api/v1/telemetry/audit' && req.method === 'GET') {
+        const stmt = node.db.db.prepare('SELECT * FROM clinical_audit_trail ORDER BY timestamp DESC LIMIT 30');
+        const rows = stmt.all() as any[];
+        sendJson(200, rows.map(r => ({
+          ...r,
+          timeStr: new Date(r.timestamp).toLocaleTimeString(),
+          details: JSON.parse(r.details_json || '{}')
+        })));
+        return;
+      }
+
+      if (pathname === '/api/v1/telemetry/activity' && req.method === 'GET') {
+        sendJson(200, node.recentActivityLogs);
+        return;
+      }
+
       if (pathname === '/api/v1/security/wipe' && req.method === 'POST') {
         const success = node.triggerEmergencyWipe();
         sendJson(200, { zeroized: success, message: 'All session state cryptographically wiped.' });
@@ -231,8 +278,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const daemon = new PeerScribeDaemon();
   const server = createPeerScribeServer(daemon);
   server.listen(PORT, HOST, () => {
-    console.log(`[PeerScribe Daemon] Operational on http://${HOST}:${PORT}`);
-    console.log(`[PeerScribe Daemon] Node ID: ${daemon.nodeId} | Mode: ${daemon.currentMode}`);
-    console.log(`[PeerScribe Daemon] SQLite WAL storage initialized.`);
+    console.log(`\n\x1b[1m\x1b[36m===============================================================\x1b[0m`);
+    console.log(`\x1b[1m\x1b[32m  PEERSCRIBE FIELD NODE DAEMON (BitChat P2P + Nostr)\x1b[0m`);
+    console.log(`\x1b[36m===============================================================\x1b[0m`);
+    console.log(`  \x1b[1mStatus:\x1b[0m       ONLINE & READY`);
+    console.log(`  \x1b[1mNode ID:\x1b[0m      ${daemon.nodeId}`);
+    console.log(`  \x1b[1mPublic Key:\x1b[0m   ${daemon.keyPair.publicKey.substring(0, 32)}...`);
+    console.log(`  \x1b[1mSector:\x1b[0m       ${daemon.sectorGeohash} (27.7172° N, 85.3240° E)`);
+    console.log(`  \x1b[1mStorage:\x1b[0m      SQLite WAL Engine initialized (Zero-Central DB)`);
+    console.log(`  \x1b[1mWeb UI:\x1b[0m       \x1b[4mhttp://localhost:${PORT}\x1b[0m`);
+    console.log(`  \x1b[1mTelemetry:\x1b[0m    \x1b[4mhttp://localhost:${PORT}/api/v1/telemetry/packets\x1b[0m`);
+    console.log(`\x1b[36m===============================================================\x1b[0m\n`);
+    console.log(`\x1b[90m[Awaiting tactical field triage & mesh sync events...]\x1b[0m\n`);
   });
 }
