@@ -33,3 +33,6 @@ export * from './location/particle_filter.ts';
 
 // Security & Emergency Zeroization
 export * from './security/emergency_wipe.ts';
+
+// Durable Local Storage & Database
+export * from './storage/db.ts';

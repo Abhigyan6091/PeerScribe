@@ -907,76 +907,55 @@ The CI/CD system is organized into four purpose-built GitHub Actions workflows l
 ```
 PeerScribe/
 ├── .github/                      # CI/CD workflows & linters
+│   ├── workflows/
+│   │   ├── ci.yml                # Multi-OS test matrix
+│   │   ├── release.yml           # Multi-target asset packager
+│   │   ├── source-manifest.yml   # BitChat verifiable source manifest
+│   │   └── benchmarks.yml        # Nightly research benchmark runner
 ├── docs/                         # Architecture diagrams & protocol specifications
 ├── packages/
 │   ├── core-engine/              # Shared, pure platform-agnostic TypeScript logic
 │   │   ├── src/
+│   │   │   ├── storage/          # SQLite WAL relational storage engine (node:sqlite)
+│   │   │   │   └── db.ts         # Relational tables, indexes, audit trail
 │   │   │   ├── clinical/         # START triage, rules, semantic divergence analyzer
-│   │   │   │   ├── protocols/    # Versioned triage engines (start.ts, jumpstart.ts)
-│   │   │   │   ├── divergence.ts # Clinical semantic divergence analyzer
-│   │   │   │   └── ledger.ts     # Medication administration ledger
-│   │   │   ├── crdt/             # Distributed state management
-│   │   │   │   ├── schema.ts     # Patient & Operation CRDT document definitions
-│   │   │   │   ├── automerge.ts  # Automerge document lifecycle & delta compression
-│   │   │   │   └── vectors.ts    # Causal vector clock calculations
-│   │   │   ├── storage/          # Local persistence
-│   │   │   │   ├── db.ts         # SQLite WAL connection manager
-│   │   │   │   ├── migrations/   # Relational schema migrations
-│   │   │   │   └── vault.ts      # SQLCipher / AES-GCM personal profile vault
-│   │   │   ├── identity/         # Ephemeral identity generator & keys
-│   │   │   │   ├── phonetic.ts   # Phonetic tri-word generator (RED-FALCON-04)
-│   │   │   │   ├── visual_hash.ts# Identicon generator
-│   │   │   │   └── crypto.ts     # Device Schnorr / secp256k1 key management
-│   │   │   ├── network/          # Local mesh & DTN store-and-forward
-│   │   │   │   ├── ble_types.ts  # BLE GATT & advertising interfaces
-│   │   │   │   ├── dtn_queue.ts  # Outbox store-and-forward persistence
-│   │   │   │   └── sync_wire.ts  # Universal binary bundle framing
-│   │   │   ├── nostr/            # Global gateway relay transport
-│   │   │   │   ├── client.ts     # WebSocket Nostr client
-│   │   │   │   ├── nip44.ts      # End-to-end encrypted event payload
-│   │   │   │   └── gateway.ts    # Ephemeral gateway promotion logic
-│   │   │   ├── location/         # Probabilistic search & tracking
-│   │   │   │   ├── particle.ts   # Sequential Monte Carlo particle filter
-│   │   │   │   ├── terrain.ts    # Cost grid & barrier collision
-│   │   │   │   └── heatmap.ts    # Kernel density estimation calculator
-│   │   │   └── ai/               # On-device Edge AI pipelines
-│   │   │       ├── asr.ts        # Whisper ASR integration
-│   │   │       ├── slm.ts        # Small quantized language model driver
-│   │   │       └── validator.ts  # Strict schema enforcement
+│   │   │   ├── crdt/             # Vector clocks and CRDT multi-value documents
+│   │   │   ├── identity/         # Ed25519, Schnorr, Ephemeral phonetic IDs
+│   │   │   ├── network/          # BitChat wire protocol, chunker, Bloom filter, DTN, Noise XX
+│   │   │   ├── nostr/            # BitChat Nostr Kind 20042 gateway & Geohash tagging
+│   │   │   ├── location/         # Sequential Monte Carlo particle filter
+│   │   │   ├── ai/               # Edge speech-to-triage extractor
+│   │   │   ├── profile/          # AES-256-GCM personal profile vault
+│   │   │   └── security/         # Emergency wipe zeroization service
+│   │   └── package.json
+│   │
+│   ├── backend-service/          # Node Runtime Service Daemon & Tactical API
+│   │   ├── src/
+│   │   │   ├── node_daemon.ts    # Central runtime daemon & state machine coordinator
+│   │   │   └── server.ts         # HTTP REST, SSE event stream & static UI server
+│   │   ├── tests/
+│   │   │   └── daemon.test.ts    # Automated daemon and API integration tests
 │   │   └── package.json
 │   │
 │   ├── platform-adapters/        # Native hardware adapters (Mobile / Desktop)
 │   │   ├── src/
-│   │   │   ├── ble_adapter.ts    # WebBluetooth / React Native BLE / Noble adapter
-│   │   │   ├── gnss_adapter.ts   # Geolocation & Barometer adapter
-│   │   │   └── audio_adapter.ts  # PCM 16kHz microphone stream adapter
+│   │   │   ├── ble_mock.ts       # In-memory radio router simulator
+│   │   │   └── gnss_mock.ts      # Great-circle distance & Geohash encoder
 │   │   └── package.json
 │   │
-│   └── ui-app/                   # Cross-Platform High-Stress UI Application
-│       ├── src/
-│       │   ├── components/       # Touch-target optimized components
-│       │   │   ├── TriageButton.tsx
-│       │   │   ├── DivergenceAlert.tsx
-│       │   │   ├── PushToTalkBar.tsx
-│       │   │   ├── PatientCard.tsx
-│       │   │   └── SearchMap.tsx
-│       │   ├── styles/           # High-contrast tactical design tokens
-│       │   │   ├── tokens.css
-│       │   │   └── high_contrast.css
-│       │   ├── views/            # Screen views
-│       │   │   ├── OperationDashboard.tsx
-│       │   │   ├── TriageActionView.tsx
-│       │   │   ├── SearchHeatmapView.tsx
-│       │   │   └── PersonalProfileVault.tsx
-│       │   ├── App.tsx
-│       │   └── main.tsx
+│   └── ui-app/                   # Cross-Platform High-Stress Tactical UI
+│       ├── styles/
+│       │   └── tokens.css        # 64px+ Fitts's law thumb tokens, WCAG AAA theme
+│       ├── index.html            # Two-Tap Triage station & live divergence modal
+│       ├── app.js                # Live REST & SSE client controller
 │       └── package.json
 │
 ├── tests/
-│   ├── benchmarks/               # Formal research evaluation test suite (Exps 1-7)
-│   ├── unit/                     # Unit tests for core algorithms
-│   └── integration/              # Multi-node network mesh simulations
-├── implementation.md             # This master implementation plan
+│   └── benchmarks/
+│       └── experiments.test.ts   # Formal research evaluation test suite (Exps 1-7)
+├── scripts/
+│   └── generate-manifest.js      # BitChat cryptographic build integrity generator
+├── implementation.md             # Master implementation plan & blueprint
 └── package.json
 ```
 

@@ -33,7 +33,7 @@ export function extractStructuredObservation(transcript: string): StructuredClin
 
   // Perfusion / Radial pulse
   let radialPulsePresent: boolean | undefined;
-  if (text.includes('weak pulse') || text.includes('absent pulse') || text.includes('no radial pulse') || text.includes('no pulse')) {
+  if (text.includes('weak pulse') || text.includes('absent pulse') || text.includes('absent radial pulse') || text.includes('no radial pulse') || text.includes('no pulse')) {
     radialPulsePresent = false;
   } else if (text.includes('strong pulse') || text.includes('radial pulse present') || text.includes('pulse normal')) {
     radialPulsePresent = true;

@@ -1,49 +1,129 @@
 /**
  * PeerScribe Tactical UI Controller
- * Fitts's Law 2-Tap Triage, Semantic Divergence Modal, and Simulated Mesh Relay
+ * Integrates directly with the PeerScribe backend service daemon via REST & SSE
+ * with resilient offline fallback when running standalone.
  */
 
+const API_BASE = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:4321';
 const PHONETIC_ANIMALS = ['PANTHER', 'FALCON', 'WOLF', 'OTTER', 'BADGER', 'HAWK', 'BEAR', 'VIPER'];
 let currentMode = 'EMERGENCY'; // EMERGENCY | FIELD | DORMANT
 let isRecording = false;
+let isBackendConnected = false;
 
-// Simulated active state
+// Active triage target
 let activePatient = {
   id: 'pt_001',
   ephemeralId: 'RED-PANTHER-04',
   triage: 'RED',
   vitals: 'RR: 34/min | Radial Pulse: Absent | Mental: Altered',
-  time: '1m ago'
+  time: 'just now'
 };
 
-const casualties = [
+let casualties = [
   { id: 'RED-PANTHER-04', triage: 'RED', meta: 'RR: 34/min | Radial Pulse: Absent | Mental: Altered | 1m ago' },
   { id: 'YELLOW-OTTER-12', triage: 'YELLOW', meta: 'RR: 20/min | Radial Pulse: Normal | Mental: Alert | 4m ago' },
   { id: 'GREEN-WOLF-02', triage: 'GREEN', meta: 'Ambulatory | Minor laceration left forearm | 9m ago' }
 ];
 
-// Trigger simulated divergence alert after 3 seconds for demonstration
-setTimeout(() => {
-  const banner = document.getElementById('divergenceBanner');
-  if (banner) banner.style.display = 'block';
-}, 3000);
+// Initialize Backend Connection & SSE
+async function initBackendConnection() {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/status`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      isBackendConnected = true;
+      const status = await res.json();
+      console.log('[PeerScribe UI] Connected to live daemon:', status.nodeId);
+      
+      const meshStatusEl = document.getElementById('meshStatus');
+      if (meshStatusEl) {
+        meshStatusEl.innerText = `Mesh Node: ${status.nodeId.substring(0, 12)} | Mode: ${status.currentMode}`;
+      }
 
-function assignTriage(category) {
-  // Update active patient
+      await loadBackendPatients();
+      setupSseStream();
+    }
+  } catch (err) {
+    console.warn('[PeerScribe UI] Running in standalone offline simulation mode.');
+  }
+}
+
+async function loadBackendPatients() {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/patients`);
+    if (res.ok) {
+      const remotePatients = await res.json();
+      if (remotePatients.length > 0) {
+        casualties = remotePatients.map(p => ({
+          id: p.doc.ephemeralId,
+          patientId: p.doc.patientId,
+          triage: p.activeTriage,
+          meta: `Observed ${p.doc.vitals?.length || 0} vitals | Updated ${new Date(p.doc.createdAt).toLocaleTimeString()}`
+        }));
+        renderCasualties();
+      }
+    }
+  } catch (err) {
+    // Ignore in offline mode
+  }
+}
+
+function setupSseStream() {
+  try {
+    const evtSource = new EventSource(`${API_BASE}/api/v1/events`);
+    evtSource.addEventListener('patientUpdated', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[SSE] Patient updated:', data);
+      loadBackendPatients();
+      if (data.divergences && data.divergences.length > 0) {
+        const banner = document.getElementById('divergenceBanner');
+        if (banner) banner.style.display = 'block';
+      }
+    });
+
+    evtSource.addEventListener('modeChanged', (e) => {
+      const data = JSON.parse(e.data);
+      updateModeBadge(data.newMode);
+    });
+
+    evtSource.addEventListener('emergencyWiped', () => {
+      casualties.length = 0;
+      renderCasualties();
+      document.getElementById('activePatientId').innerText = 'WIPED-00';
+    });
+  } catch (err) {
+    console.warn('[SSE] EventSource unavailable.');
+  }
+}
+
+async function assignTriage(category) {
   activePatient.triage = category;
-  
-  // Feedback vibration if supported
+
   if (navigator.vibrate) {
     navigator.vibrate(category === 'RED' ? [100, 50, 100] : [50]);
   }
 
-  // Update list
+  // If connected to backend, sync via REST
+  if (isBackendConnected) {
+    try {
+      await fetch(`${API_BASE}/api/v1/patients/${activePatient.id}/triage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, protocol: 'START_v1.0.0' })
+      });
+      await loadBackendPatients();
+    } catch (err) {
+      console.error('[API Error] Triage sync failed, falling back to local replica:', err);
+    }
+  }
+
+  // Update local memory replica
   const existing = casualties.find(c => c.id === activePatient.ephemeralId);
   if (existing) {
     existing.triage = category;
   } else {
     casualties.unshift({
       id: activePatient.ephemeralId,
+      patientId: activePatient.id,
       triage: category,
       meta: `Just assessed | Category: ${category}`
     });
@@ -55,7 +135,7 @@ function assignTriage(category) {
   const randomAnimal = PHONETIC_ANIMALS[Math.floor(Math.random() * PHONETIC_ANIMALS.length)];
   const randomNum = Math.floor(Math.random() * 89) + 10;
   const nextId = `${category}-${randomAnimal}-${randomNum}`;
-  
+
   activePatient = {
     id: `pt_${Date.now()}`,
     ephemeralId: nextId,
@@ -93,7 +173,7 @@ function renderCasualties() {
   }).join('');
 }
 
-function toggleVoiceRecording() {
+async function toggleVoiceRecording() {
   const ptt = document.getElementById('pttButton');
   const pttText = document.getElementById('pttText');
 
@@ -102,36 +182,67 @@ function toggleVoiceRecording() {
     ptt.classList.add('recording');
     pttText.innerText = 'Listening (Whisper ASR Live)...';
 
-    // Simulate speech-to-structured clinical pipeline after 2.5s
-    setTimeout(() => {
+    setTimeout(async () => {
       isRecording = false;
       ptt.classList.remove('recording');
-      pttText.innerText = 'Observed: RR 32, radial pulse absent -> RED';
 
-      // Automatically evaluate START triage: RR 32 > 30 -> RED
-      assignTriage('RED');
+      const sampleTranscript = 'Adult patient, respiration rate 34, radial pulse absent, mental status altered';
+      pttText.innerText = 'Observed: RR 34, pulse absent -> Evaluating START triage...';
+
+      if (isBackendConnected) {
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/ai/transcribe-triage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transcript: sampleTranscript, patientId: activePatient.id })
+          });
+          const result = await res.json();
+          pttText.innerText = `START Rule Applied: ${result.triageResult.category} (${result.triageResult.reason})`;
+          await loadBackendPatients();
+        } catch (err) {
+          assignTriage('RED');
+        }
+      } else {
+        assignTriage('RED');
+      }
+
       setTimeout(() => {
         pttText.innerText = 'Push To Talk Clinical Observation';
       }, 3500);
-    }, 2500);
+    }, 2000);
   }
 }
 
-function toggleOperationalMode() {
-  const badge = document.getElementById('modeBadge');
-  if (currentMode === 'EMERGENCY') {
-    currentMode = 'FIELD';
-    badge.innerText = 'FIELD';
-    badge.style.background = 'var(--mode-field)';
-  } else if (currentMode === 'FIELD') {
-    currentMode = 'DORMANT';
-    badge.innerText = 'DORMANT';
-    badge.style.background = 'var(--mode-dormant)';
-  } else {
-    currentMode = 'EMERGENCY';
-    badge.innerText = 'EMERGENCY';
-    badge.style.background = 'var(--mode-emergency)';
+async function toggleOperationalMode() {
+  let nextMode = 'EMERGENCY';
+  if (currentMode === 'EMERGENCY') nextMode = 'FIELD';
+  else if (currentMode === 'FIELD') nextMode = 'DORMANT';
+  else nextMode = 'EMERGENCY';
+
+  if (isBackendConnected) {
+    try {
+      await fetch(`${API_BASE}/api/v1/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: nextMode })
+      });
+    } catch (err) {
+      // offline fallback
+    }
   }
+
+  updateModeBadge(nextMode);
+}
+
+function updateModeBadge(mode) {
+  currentMode = mode;
+  const badge = document.getElementById('modeBadge');
+  if (!badge) return;
+
+  badge.innerText = mode;
+  if (mode === 'EMERGENCY') badge.style.background = 'var(--mode-emergency)';
+  else if (mode === 'FIELD') badge.style.background = 'var(--mode-field)';
+  else badge.style.background = 'var(--mode-dormant)';
 }
 
 function openDivergenceModal() {
@@ -144,7 +255,7 @@ function closeDivergenceModal() {
   if (modal) modal.style.display = 'none';
 }
 
-function resolveConflict(confirmedCategory) {
+async function resolveConflict(confirmedCategory) {
   const banner = document.getElementById('divergenceBanner');
   if (banner) banner.style.display = 'none';
   closeDivergenceModal();
@@ -153,9 +264,16 @@ function resolveConflict(confirmedCategory) {
   alert(`Clinical divergence resolved: Patient confirmed as ${confirmedCategory} by authorized clinician.`);
 }
 
-function triggerEmergencyWipe() {
+async function triggerEmergencyWipe() {
   const confirmWipe = confirm('⚠️ EMERGENCY WIPE: This will immediately zeroize encryption keys, wipe all local CRDT replicas, and clear patient data. Proceed?');
   if (confirmWipe) {
+    if (isBackendConnected) {
+      try {
+        await fetch(`${API_BASE}/api/v1/security/wipe`, { method: 'POST' });
+      } catch (err) {
+        // offline fallback
+      }
+    }
     casualties.length = 0;
     renderCasualties();
     document.getElementById('activePatientId').innerText = 'WIPED-00';
@@ -164,5 +282,6 @@ function triggerEmergencyWipe() {
   }
 }
 
-// Initial render
+// Initialize on page load
 renderCasualties();
+initBackendConnection();

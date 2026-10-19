@@ -10,8 +10,9 @@
   "scripts": {
     "lint": "echo 'Linting checks passed.'",
     "typecheck": "echo 'Typechecking verified.'",
-    "test": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts tests/benchmarks/experiments.test.ts",
+    "test": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts packages/backend-service/tests/daemon.test.ts tests/benchmarks/experiments.test.ts",
     "test:coverage": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts",
+    "test:daemon": "node --experimental-strip-types --test packages/backend-service/tests/daemon.test.ts",
     "test:bench:crdt": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",
     "test:bench:dtn": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",
     "test:bench:nostr": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",
@@ -19,6 +20,8 @@
     "test:bench:search": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",
     "benchmark": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",
     "manifest": "node scripts/generate-manifest.js",
+    "start": "node --experimental-strip-types packages/backend-service/src/server.ts",
+    "start:daemon": "node --experimental-strip-types packages/backend-service/src/server.ts",
     "build": "echo 'Building cross-platform distribution targets...'"
   },
   "keywords": [

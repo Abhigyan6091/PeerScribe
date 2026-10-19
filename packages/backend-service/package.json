@@ -1,0 +1,14 @@
+{
+  "name": "@peerscribe/backend-service",
+  "version": "1.0.0-alpha.1",
+  "description": "PeerScribe Runtime Node Daemon & Tactical Service Layer",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "start": "node --experimental-strip-types src/server.ts",
+    "test": "node --experimental-strip-types --test tests/daemon.test.ts"
+  },
+  "dependencies": {
+    "@peerscribe/core-engine": "*"
+  }
+}
