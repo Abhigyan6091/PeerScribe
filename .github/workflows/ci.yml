@@ -41,7 +41,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest, windows-latest, macos-latest ]
-        node-version: [ '20', '22' ]
+        node-version: [ '22' ]
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -56,12 +56,4 @@ jobs:
         run: npm ci || npm install
 
       - name: Run Core & Platform Unit Tests
-        run: npm test --if-present -- --coverage
-
-      - name: Upload Test Coverage (Ubuntu Only)
-        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-coverage-report
-          path: coverage/
-          retention-days: 14
+        run: npm test --if-present

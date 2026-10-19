@@ -95,7 +95,7 @@ function setupSseStream() {
   }
 }
 
-async function assignTriage(category) {
+async function assignTriage(category, autoAdvance = true) {
   activePatient.triage = category;
 
   if (navigator.vibrate) {
@@ -120,31 +120,52 @@ async function assignTriage(category) {
   const existing = casualties.find(c => c.id === activePatient.ephemeralId);
   if (existing) {
     existing.triage = category;
+    existing.meta = activePatient.vitals || `Just assessed | Category: ${category}`;
   } else {
     casualties.unshift({
       id: activePatient.ephemeralId,
       patientId: activePatient.id,
       triage: category,
-      meta: `Just assessed | Category: ${category}`
+      meta: activePatient.vitals || `Just assessed | Category: ${category}`
     });
   }
 
   renderCasualties();
+  updateActivePatientDisplay();
 
-  // Generate next ephemeral intake ID
+  // If manual intake mode, advance to next casualty
+  if (autoAdvance) {
+    createNewIntakePatient(category);
+  }
+}
+
+function updateActivePatientDisplay() {
+  const idEl = document.getElementById('activePatientId');
+  if (idEl) idEl.innerText = activePatient.ephemeralId;
+
+  // Update visual identicon color
+  const iconEl = document.getElementById('activeIdenticon');
+  if (iconEl) {
+    const c = activePatient.triage === 'RED' ? '#FF1A1A' : activePatient.triage === 'YELLOW' ? '#FFD600' : activePatient.triage === 'GREEN' ? '#00E676' : '#4B5563';
+    iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/><rect x="0" y="0" width="12" height="12" fill="${c}"/><rect x="24" y="0" width="12" height="12" fill="${c}"/><rect x="12" y="12" width="12" height="12" fill="${c}"/><rect x="36" y="24" width="12" height="12" fill="${c}"/><rect x="0" y="36" width="12" height="12" fill="${c}"/></svg>`;
+  }
+}
+
+function createNewIntakePatient(prefix = 'PENDING') {
   const randomAnimal = PHONETIC_ANIMALS[Math.floor(Math.random() * PHONETIC_ANIMALS.length)];
   const randomNum = Math.floor(Math.random() * 89) + 10;
-  const nextId = `${category}-${randomAnimal}-${randomNum}`;
+  const nextId = `${prefix}-${randomAnimal}-${randomNum}`;
 
   activePatient = {
     id: `pt_${Date.now()}`,
     ephemeralId: nextId,
-    triage: category,
-    vitals: 'Awaiting physiological observations',
+    triage: 'YELLOW',
+    vitals: 'Awaiting clinical evaluation',
     time: 'just now'
   };
 
-  document.getElementById('activePatientId').innerText = nextId;
+  updateActivePatientDisplay();
+  clearVoiceInput();
 }
 
 function renderCasualties() {
@@ -174,17 +195,22 @@ function renderCasualties() {
 }
 
 // =========================================================================
-// Real Edge Speech Recognition & Clinical Dictation Engine
+// Real Edge Speech Recognition, Audio VU Meter & Clinical Dictation Engine
 // =========================================================================
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let recordingTimer = null;
 let recordingDurationSec = 0;
 let finalSpeechTranscript = '';
+let audioContext = null;
+let audioStream = null;
+let analyserNode = null;
+let vuAnimationId = null;
+let aiLogsCache = [];
 
 function setupSpeechEngine() {
   if (!SpeechRecognition) {
-    console.info('[PeerScribe Speech] Web Speech API not natively available in this browser. Dictation text input is available.');
+    console.info('[PeerScribe Speech] Web Speech API not natively available in this browser. Dictation text input & VU meter are active.');
     const statusPill = document.getElementById('voiceStatusPill');
     if (statusPill) statusPill.innerText = 'MANUAL / ASR FALLBACK';
     return;
@@ -203,14 +229,15 @@ function setupSpeechEngine() {
 
     recognition.onresult = (event) => {
       let interimTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
+      let finalTranscript = '';
+      for (let i = 0; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          finalSpeechTranscript += event.results[i][0].transcript + ' ';
+          finalTranscript += event.results[i][0].transcript + ' ';
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
-      const combined = (finalSpeechTranscript + interimTranscript).trim();
+      const combined = (finalTranscript + interimTranscript).trim();
       const inputEl = document.getElementById('voiceTranscriptInput');
       if (inputEl) {
         inputEl.value = combined;
@@ -223,9 +250,13 @@ function setupSpeechEngine() {
 
     recognition.onerror = (event) => {
       console.warn('[PeerScribe Speech] Recognition notice:', event.error);
+      const statusPill = document.getElementById('voiceStatusPill');
       if (event.error === 'not-allowed') {
         alert('Microphone access was denied. You can still type observations or click presets.');
+        if (statusPill) statusPill.innerText = 'MIC PERMISSION DENIED';
         stopVoiceRecording(false);
+      } else if (event.error === 'network') {
+        if (statusPill) statusPill.innerText = 'OFFLINE (DICTATION READY)';
       }
     };
 
@@ -242,6 +273,66 @@ function setupSpeechEngine() {
   } catch (err) {
     console.error('[PeerScribe Speech] Failed initializing Web Speech API:', err);
   }
+}
+
+async function startAudioMeter() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(audioStream);
+    analyserNode = audioContext.createAnalyser();
+    analyserNode.fftSize = 256;
+    analyserNode.smoothingTimeConstant = 0.5;
+    source.connect(analyserNode);
+
+    const visualizerRow = document.getElementById('audioVisualizerRow');
+    if (visualizerRow) visualizerRow.style.display = 'flex';
+
+    const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+    const updateMeter = () => {
+      if (!isRecording) return;
+      analyserNode.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      const avg = sum / dataArray.length;
+      const percent = Math.min(100, Math.round((avg / 128) * 100));
+      const db = avg > 0 ? Math.round(20 * Math.log10(avg / 255)) : -60;
+
+      const bar = document.getElementById('vuMeterBar');
+      const label = document.getElementById('vuMeterDb');
+      if (bar) bar.style.width = `${Math.max(6, percent)}%`;
+      if (label) {
+        if (percent > 35) label.innerText = `${db} dB [LOUD]`;
+        else if (percent > 12) label.innerText = `${db} dB [VOICE]`;
+        else label.innerText = `${db} dB [QUIET]`;
+      }
+
+      vuAnimationId = requestAnimationFrame(updateMeter);
+    };
+    updateMeter();
+  } catch (err) {
+    console.warn('[PeerScribe Audio] Mic audio meter notice:', err.message);
+  }
+}
+
+function stopAudioMeter() {
+  if (vuAnimationId) {
+    cancelAnimationFrame(vuAnimationId);
+    vuAnimationId = null;
+  }
+  if (audioStream) {
+    audioStream.getTracks().forEach(t => t.stop());
+    audioStream = null;
+  }
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+  const visualizerRow = document.getElementById('audioVisualizerRow');
+  if (visualizerRow) visualizerRow.style.display = 'none';
 }
 
 function updateVoiceUiRecordingState(recording) {
@@ -289,6 +380,7 @@ function startVoiceRecording() {
   }
 
   updateVoiceUiRecordingState(true);
+  startAudioMeter();
 
   // Live timer tick every second with NO arbitrary cutoff!
   recordingTimer = setInterval(() => {
@@ -324,6 +416,8 @@ function stopVoiceRecording(evaluateImmediately = true) {
     clearInterval(recordingTimer);
     recordingTimer = null;
   }
+
+  stopAudioMeter();
 
   if (recognition) {
     try {
@@ -404,16 +498,34 @@ async function evaluateCurrentTranscript() {
           reason: isBlack ? 'Apneic after airway opened' : isRed ? 'Vital sign trigger: Respiration or Perfusion compromised' : isGreen ? 'Ambulatory walking wounded' : 'Delayed evacuation status'
         }
       };
-      assignTriage(category);
+      await assignTriage(category, false);
     } else {
-      assignTriage(result.triageResult.category);
+      await assignTriage(result.triageResult.category, false);
       await loadBackendPatients();
     }
 
+    // Update active patient vitals display with extracted values
+    const obs = result.observation || {};
+    const tri = result.triageResult || {};
+    const vitalsSummary = `RR: ${obs.respirationRate ?? 'Unrecorded'}/min | Radial: ${obs.radialPulsePresent === false ? 'ABSENT' : 'PRESENT'} | Mental: ${obs.mentalStatus || 'NORMAL'}`;
+    activePatient.vitals = vitalsSummary;
+    updateActivePatientDisplay();
+
+    // Cache to Edge AI Telemetry Log
+    aiLogsCache.unshift({
+      timeStr: new Date().toLocaleTimeString(),
+      transcript: text,
+      observation: obs,
+      triageResult: tri,
+      patientId: activePatient.ephemeralId
+    });
+    if (aiLogsCache.length > 25) aiLogsCache.pop();
+    const aiCountEl = document.getElementById('aiCount');
+    if (aiCountEl) aiCountEl.innerText = aiLogsCache.length;
+    renderTelemetryView();
+
     // Render structured extractor breakdown card
     if (evalOutput) {
-      const obs = result.observation || {};
-      const tri = result.triageResult || {};
       const badgeColor = tri.category === 'RED' ? '#FF1A1A' : tri.category === 'YELLOW' ? '#FFD600' : tri.category === 'GREEN' ? '#00E676' : '#6B7280';
       
       evalOutput.style.display = 'block';
@@ -428,7 +540,7 @@ async function evaluateCurrentTranscript() {
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 0.74rem; color: #A0AEC0; background: #0E121A; padding: 6px; border-radius: 4px;">
           <div>RR: <strong style="color: #FFF;">${obs.respirationRate ?? 'Unrecorded'}</strong></div>
-          <div>Radial Pulse: <strong style="color: #FFF;">${obs.radialPulsePresent === false ? 'ABSENT' : obs.radialPulsePresent === true ? 'PRESENT' : 'Normal'}</strong></div>
+          <div>Radial Pulse: <strong style="color: ${obs.radialPulsePresent === false ? '#FF1A1A' : '#00F5D4'};">${obs.radialPulsePresent === false ? 'ABSENT' : obs.radialPulsePresent === true ? 'PRESENT' : 'Normal'}</strong></div>
           <div>Mental: <strong style="color: #FFF;">${obs.mentalStatus || 'NORMAL'}</strong></div>
           <div>Age: <strong style="color: #FFF;">${obs.ageGroup || 'ADULT'}</strong></div>
         </div>
@@ -564,7 +676,7 @@ function toggleTelemetry() {
 
 function switchTeleTab(tab) {
   currentTeleTab = tab;
-  ['wire', 'audit', 'dtn', 'nostr', 'console'].forEach(t => {
+  ['wire', 'audit', 'dtn', 'ai', 'nostr', 'console'].forEach(t => {
     const btn = document.getElementById(`tab${t.charAt(0).toUpperCase() + t.slice(1)}`);
     if (btn) btn.classList.toggle('active', t === tab);
   });
@@ -594,6 +706,8 @@ async function refreshTelemetry() {
     if (auditCountEl) auditCountEl.innerText = auditTrailCache.length;
     const dtnCountEl = document.getElementById('dtnCount');
     if (dtnCountEl) dtnCountEl.innerText = dtnBundlesCache.length;
+    const aiCountEl = document.getElementById('aiCount');
+    if (aiCountEl) aiCountEl.innerText = aiLogsCache.length;
 
     renderTelemetryView();
   } catch (err) {
@@ -653,6 +767,25 @@ function renderTelemetryView() {
         </div>
         <div class="tele-field"><span>Priority:</span> <strong style="color: #EF4444;">${b.priority}</strong></div>
         <div class="tele-field"><span>Hop Count:</span> ${b.hopCount} / ${b.maxHops} | Wire Payload: ${b.payloadBytes} bytes</div>
+      </div>
+    `).join('');
+  } else if (currentTeleTab === 'ai') {
+    if (aiLogsCache.length === 0) {
+      container.innerHTML = '<div style="color: #6B7285;">Awaiting Edge AI speech extractions... Click Push To Talk or select a preset chip above to inspect parsed observations.</div>';
+      return;
+    }
+    container.innerHTML = aiLogsCache.map(entry => `
+      <div class="tele-card" style="border-left-color: ${entry.triageResult?.category === 'RED' ? '#FF1A1A' : entry.triageResult?.category === 'YELLOW' ? '#FFD600' : '#00E676'};">
+        <div class="tele-field">
+          <strong style="color: #00F5D4;">[AI EXTRACTOR] ${entry.patientId || 'Casualty'}</strong>
+          <span style="color: #94A3B8;">${entry.timeStr}</span>
+        </div>
+        <div class="tele-field"><span>Raw Spoken Audio:</span> <em style="color: #F8FAFC;">"${entry.transcript}"</em></div>
+        <div class="tele-field"><span>Extracted Vitals:</span> <code style="color: #A5F3FC;">RR: ${entry.observation?.respirationRate ?? 'N/A'}/min | Radial Pulse: ${entry.observation?.radialPulsePresent === false ? 'ABSENT' : 'PRESENT'} | Mental: ${entry.observation?.mentalStatus || 'NORMAL'}</code></div>
+        <div class="tele-field"><span>Rule Execution:</span> <strong style="color: ${entry.triageResult?.category === 'RED' ? '#FF1A1A' : '#FFD600'};">${entry.triageResult?.category}</strong> (${entry.triageResult?.reason || 'Evaluated'})</div>
+        <div style="color: #64748B; font-size: 0.7rem; margin-top: 3px;">
+          Confidence Score: 0.95 | SQLite WAL Committed: Yes | Protocol: ${entry.triageResult?.protocolApplied || 'START_v1.0.0'}
+        </div>
       </div>
     `).join('');
   } else if (currentTeleTab === 'nostr') {

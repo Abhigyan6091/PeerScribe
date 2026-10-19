@@ -569,6 +569,18 @@
             <span class="voice-status-pill" id="voiceStatusPill">MIC STANDBY</span>
           </div>
 
+          <!-- Live Microphone VU Meter & Audio Decibel Indicator -->
+          <div id="audioVisualizerRow" style="display: none; align-items: center; gap: 8px; background: #0A0D14; border: 1px solid #1E2433; border-radius: 4px; padding: 6px 10px; font-family: monospace; font-size: 0.72rem;">
+            <span style="color: #00F5D4; font-weight: 800; display: flex; align-items: center; gap: 4px;">
+              <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #00F5D4; box-shadow: 0 0 6px #00F5D4;"></span>
+              MIC SIGNAL:
+            </span>
+            <div style="flex: 1; height: 10px; background: #131824; border-radius: 2px; overflow: hidden; position: relative;">
+              <div id="vuMeterBar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #00E676 0%, #FFD600 70%, #FF1A1A 100%); transition: width 0.05s ease;"></div>
+            </div>
+            <span id="vuMeterDb" style="color: #A0AEC0; font-size: 0.7rem; min-width: 60px; text-align: right;">LISTENING</span>
+          </div>
+
           <textarea 
             id="voiceTranscriptInput" 
             class="voice-input" 
@@ -599,7 +611,12 @@
     </section>
 
     <!-- Casualty Feed -->
-    <div class="section-header">Active Sector Casualties (Sorted by Severity)</div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; margin-bottom: 6px;">
+      <div class="section-header" style="margin-top: 0;">Active Sector Casualties (Sorted by Severity)</div>
+      <button onclick="createNewIntakePatient()" style="background: rgba(255,255,255,0.08); border: 1px solid #2B3347; color: #00F5D4; font-size: 0.74rem; font-weight: 800; border-radius: 4px; padding: 4px 8px; cursor: pointer;">
+        + Intake New Patient
+      </button>
+    </div>
     <div class="casualty-list" id="casualtyList">
       <div class="casualty-item" style="border-color: var(--triage-red);">
         <div>
@@ -639,6 +656,7 @@
           <button class="tele-tab active" id="tabWire" onclick="switchTeleTab('wire')">BitChat Wire Packets (<span id="wireCount">0</span>)</button>
           <button class="tele-tab" id="tabAudit" onclick="switchTeleTab('audit')">SQLite WAL Audit (<span id="auditCount">0</span>)</button>
           <button class="tele-tab" id="tabDtn" onclick="switchTeleTab('dtn')">DTN Outbox (<span id="dtnCount">0</span>)</button>
+          <button class="tele-tab" id="tabAi" onclick="switchTeleTab('ai')">Edge AI Extractor (<span id="aiCount">0</span>)</button>
           <button class="tele-tab" id="tabNostr" onclick="switchTeleTab('nostr')">Nostr Kind 20042</button>
           <button class="tele-tab" id="tabConsole" onclick="switchTeleTab('console')">Console Stream</button>
         </div>

@@ -4,9 +4,10 @@ on:
   schedule:
     # Run nightly at 02:00 UTC
     - cron: '0 2 * * *'
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
     branches:
+      - main
       - 'release/**'
 
 jobs:
@@ -26,22 +27,22 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
-      - name: Run Experiment 1: CRDT Partition Convergence Benchmark
+      - name: "Run Experiment 1: CRDT Partition Convergence Benchmark"
         run: npm run test:bench:crdt --if-present
 
-      - name: Run Experiment 2: Multi-Hop DTN Store-and-Forward Benchmark
+      - name: "Run Experiment 2: Multi-Hop DTN Store-and-Forward Benchmark"
         run: npm run test:bench:dtn --if-present
 
-      - name: Run Experiment 3: Nostr Gateway Bridging Latency Benchmark
+      - name: "Run Experiment 3: Nostr Gateway Bridging Latency Benchmark"
         run: npm run test:bench:nostr --if-present
 
-      - name: Run Experiment 4: Edge AI Extraction & Schema Validity Benchmark
+      - name: "Run Experiment 4: Edge AI Extraction & Schema Validity Benchmark"
         run: npm run test:bench:ai --if-present
 
-      - name: Run Experiment 6: Probabilistic Search Area Contraction Benchmark
+      - name: "Run Experiment 6: Probabilistic Search Area Contraction Benchmark"
         run: npm run test:bench:search --if-present
 
-      - name: Generate Research Evaluation Summary
+      - name: "Generate Research Evaluation Summary"
         run: |
           mkdir -p benchmark-results
           echo "### PeerScribe Research Benchmark Evaluation" > benchmark-results/SUMMARY.md
