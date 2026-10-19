@@ -157,7 +157,13 @@
     .btn-green { background: var(--triage-green); color: #000; }
     .btn-black { background: var(--triage-black); }
 
-    /* Push-To-Talk Voice Bar */
+    /* Push-To-Talk Voice Bar & Live Dictation */
+    .ptt-container {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
     .ptt-bar {
       min-height: var(--touch-target-large);
       background: var(--bg-surface-elevated);
@@ -166,17 +172,151 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
-      font-size: 1.05rem;
+      gap: 12px;
+      font-size: 1.02rem;
       font-weight: 700;
       cursor: pointer;
       color: #FFF;
-      transition: background 0.15s ease;
+      user-select: none;
+      transition: all 0.2s ease;
+      position: relative;
     }
-    .ptt-bar:active, .ptt-bar.recording {
-      background: rgba(255, 26, 26, 0.25);
+    .ptt-bar:hover {
+      border-color: rgba(255,255,255,0.6);
+      background: #252A3A;
+    }
+    .ptt-bar.recording {
+      background: rgba(255, 26, 26, 0.22);
       border-color: var(--triage-red);
-      color: var(--triage-red);
+      color: #FF5252;
+      animation: alertPulse 1.1s infinite;
+    }
+    .ptt-timer-badge {
+      display: none;
+      background: var(--triage-red);
+      color: #FFF;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      font-family: monospace;
+    }
+    .ptt-bar.recording .ptt-timer-badge {
+      display: inline-block;
+    }
+    .voice-panel {
+      background: #11141E;
+      border: 1px solid #2A3042;
+      border-radius: var(--border-radius-tactical);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .voice-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.76rem;
+      font-weight: 800;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+    .voice-status-pill {
+      font-family: monospace;
+      font-size: 0.72rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      color: #A0AEC0;
+    }
+    .voice-status-pill.active {
+      background: rgba(255, 26, 26, 0.2);
+      color: #FF5252;
+      border: 1px solid #FF5252;
+    }
+    .voice-input {
+      width: 100%;
+      min-height: 54px;
+      background: #0B0E14;
+      border: 1px solid #23293B;
+      border-radius: 4px;
+      padding: 8px 10px;
+      color: #E2E8F0;
+      font-family: inherit;
+      font-size: 0.88rem;
+      resize: vertical;
+      line-height: 1.35;
+    }
+    .voice-input:focus {
+      outline: none;
+      border-color: #00F5D4;
+      box-shadow: 0 0 6px rgba(0, 245, 212, 0.25);
+    }
+    .voice-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-evaluate {
+      flex: 1;
+      min-height: 38px;
+      background: #00F5D4;
+      color: #0B0E14;
+      font-weight: 800;
+      font-size: 0.84rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    .btn-evaluate:hover {
+      background: #20FFE2;
+    }
+    .btn-clear {
+      background: rgba(255,255,255,0.07);
+      color: #CBD5E0;
+      border: 1px solid #2A3042;
+      border-radius: 4px;
+      padding: 0 12px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .voice-presets {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .preset-chip {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid #242938;
+      border-radius: 3px;
+      padding: 3px 8px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #A0AEC0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .preset-chip:hover {
+      background: rgba(255,255,255,0.1);
+      color: #FFF;
+      border-color: #3F475D;
+    }
+    .voice-eval-output {
+      display: none;
+      background: #090B0F;
+      border-left: 3px solid #00F5D4;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+      line-height: 1.4;
     }
 
     /* Semantic Divergence Alert Banner */
@@ -414,9 +554,47 @@
         </button>
       </div>
 
-      <!-- Push to Talk Voice Observation -->
-      <div class="ptt-bar" id="pttButton" onclick="toggleVoiceRecording()">
-        🎤 <span id="pttText">Push To Talk Clinical Observation</span>
+      <!-- Push to Talk Voice & Clinical Dictation Station -->
+      <div class="ptt-container">
+        <div class="ptt-bar" id="pttButton" onclick="toggleVoiceRecording()">
+          <span id="pttIcon">🎤</span>
+          <span id="pttText">Push To Talk Clinical Observation</span>
+          <span class="ptt-timer-badge" id="pttTimerBadge">00:00</span>
+        </div>
+
+        <!-- Live Dictation & Manual Override Box -->
+        <div class="voice-panel" id="voicePanel">
+          <div class="voice-panel-header">
+            <span>EDGE ASR &amp; START CLINICAL EXTRACTOR</span>
+            <span class="voice-status-pill" id="voiceStatusPill">MIC STANDBY</span>
+          </div>
+
+          <textarea 
+            id="voiceTranscriptInput" 
+            class="voice-input" 
+            placeholder="Live speech transcript streams here. You can also edit or type clinical observations (e.g. 'Adult victim, respiration rate 34, radial pulse absent, altered mental status')..."
+            rows="2"
+          ></textarea>
+
+          <div class="voice-actions">
+            <button class="btn-evaluate" id="btnEvaluateSpeech" onclick="evaluateCurrentTranscript()">
+              ⚡ Evaluate &amp; Apply START Triage
+            </button>
+            <button class="btn-clear" onclick="clearVoiceInput()">Clear</button>
+          </div>
+
+          <div class="voice-presets">
+            <span style="font-size: 0.7rem; color: #718096; align-self: center; font-weight: 700;">PRESETS:</span>
+            <div class="preset-chip" onclick="applyPreset('Adult patient, respiration rate 34, radial pulse absent, altered mental status')">🔴 Immediate (RR 34, Pulse Absent)</div>
+            <div class="preset-chip" onclick="applyPreset('Adult patient, cannot walk, respiration rate 20, radial pulse present, follows commands')">🟡 Delayed (RR 20, Pulse Present)</div>
+            <div class="preset-chip" onclick="applyPreset('Patient is ambulatory, walking wounded, alert and oriented')">🟢 Minor (Ambulatory)</div>
+            <div class="preset-chip" onclick="applyPreset('Patient not breathing, airway opened, breathing not resumed')">⚫ Expectant (Apneic)</div>
+            <div class="preset-chip" onclick="applyPreset('Pediatric patient, 6 year old, respiratory rate 12, weak pulse')">🧒 JumpSTART Child (RR 12)</div>
+          </div>
+
+          <!-- Structured Clinical Extractor Live Result Card -->
+          <div class="voice-eval-output" id="voiceEvalOutput"></div>
+        </div>
       </div>
     </section>
 
