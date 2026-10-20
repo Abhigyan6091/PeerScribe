@@ -93,6 +93,26 @@ test('Backend Service Daemon: Voice Distress Relay with Broken Leg, Entrapment &
   assert.strictEqual(daemon.recentWirePackets[0].priority, 'CRITICAL_SOS');
 });
 
+test('Backend Service Daemon: Natural Trauma Speech Extraction ("injured in hand and legs, cannot work")', () => {
+  const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
+  const transcript = "I am currently very busy I can't work I am injured in my hand and legs";
+
+  const res = daemon.processVoiceTranscript(transcript);
+  assert.ok(res.patientId);
+  assert.strictEqual(res.observation.canWalk, false);
+  assert.strictEqual(res.observation.mobilityStatus, 'IMPAIRED');
+  assert.ok(res.observation.injuries.some((i: string) => i.includes('injured in my hand and legs')));
+  assert.strictEqual(res.triageResult.category, 'YELLOW');
+  assert.ok(res.triageResult.reason.includes('injured in my hand and legs'));
+
+  // Verify CRDT document recorded injury
+  const loaded = daemon.db.getPatientDocument(res.patientId);
+  assert.ok(loaded);
+  assert.ok(loaded!.injuries.length >= 1);
+  assert.strictEqual(loaded!.injuries[0].classification, 'injured in my hand and legs');
+  assert.ok(loaded!.notes[0].text.includes(transcript));
+});
+
 test('Backend Service Daemon: HTTP Server API Endpoints', async () => {
   const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
   const server = createPeerScribeServer(daemon);

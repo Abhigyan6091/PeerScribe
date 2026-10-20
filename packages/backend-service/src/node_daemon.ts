@@ -452,16 +452,19 @@ export class PeerScribeDaemon extends EventEmitter {
     this.recordNote(targetDoc.patientId, `[VOICE DISTRESS TRANSMISSION] "${transcript}"`);
 
     // 4. Record START Triage outcome
-    const triageOutcome = this.recordTriage(
-      targetDoc.patientId,
-      aiResult.triageResult.category,
-      aiResult.triageResult.protocolApplied,
+    const triageReason = aiResult.triageResult.rationale || (
       aiResult.observation.injuries.length > 0
         ? `Edge AI parsed: ${aiResult.observation.injuries.join(', ')}`
         : 'Extracted via Edge AI speech input'
     );
+    const triageOutcome = this.recordTriage(
+      targetDoc.patientId,
+      aiResult.triageResult.category,
+      aiResult.triageResult.protocol || 'START_v1.0.0',
+      triageReason
+    );
 
-    console.log(`\x1b[36m[EDGE AI SPEECH]\x1b[0m Parsed: "${transcript}" -> START Triage: \x1b[1m${aiResult.triageResult.category}\x1b[0m`);
+    console.log(`\x1b[36m[EDGE AI SPEECH]\x1b[0m Parsed: "${transcript}" -> START Triage: \x1b[1m${aiResult.triageResult.category}\x1b[0m (${triageReason})`);
     this.logActivity('AI', `Voice Extracted -> Triage: ${aiResult.triageResult.category}`, {
       transcript,
       vitals: aiResult.observation,
@@ -471,7 +474,11 @@ export class PeerScribeDaemon extends EventEmitter {
     return {
       patientId: targetDoc.patientId,
       observation: aiResult.observation,
-      triageResult: aiResult.triageResult,
+      triageResult: {
+        category: aiResult.triageResult.category,
+        protocolApplied: aiResult.triageResult.protocol || 'START_v1.0.0',
+        reason: triageReason
+      },
       updatedDoc: triageOutcome.doc,
       wireTelemetry: triageOutcome.wireTelemetry
     };

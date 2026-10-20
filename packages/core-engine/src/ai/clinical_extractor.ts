@@ -3,12 +3,14 @@ import { evaluateTriage, type TriageResult, type VitalsInput } from '../clinical
 export interface StructuredClinicalObservation {
   ageGroup: 'ADULT' | 'PEDIATRIC' | 'UNKNOWN';
   canWalk: boolean;
+  mobilityStatus?: 'WALKING' | 'IMPAIRED' | 'UNKNOWN';
   isBreathingSpontaneous: boolean;
   breathingAfterAirwayOpen?: boolean;
   respirationRate?: number;
   radialPulsePresent?: boolean;
   capillaryRefillSeconds?: number;
   mentalStatus: 'NORMAL' | 'ALTERED' | 'UNRESPONSIVE';
+  mentalStatusExplicit?: boolean;
   injuries: string[];
   allergiesMentioned: string[];
   medicationsAdministeredMentioned: string[];
@@ -55,19 +57,29 @@ function normalizeSpokenNumbers(text: string): string {
  * Adheres strictly to Principle P5: Extracts observations only; does NOT prescribe.
  */
 export function extractStructuredObservation(rawTranscript: string): StructuredClinicalObservation {
-  const text = normalizeSpokenNumbers(rawTranscript);
+  const normalized = normalizeSpokenNumbers(rawTranscript);
+  // Strip apostrophes so contractions like can't, don't, I'm match cant, dont, im uniformly
+  const text = normalized.replace(/['’]/g, '');
 
-  // 1. Ambulatory Status
+  // 1. Ambulatory & Functional Mobility Status
   let canWalk = false;
-  if (
-    text.includes('walking') || text.includes('ambulatory') || text.includes('can walk') ||
-    text.includes('walks') || text.includes('able to walk') || text.includes('able to stand') ||
-    text.includes('walking wounded')
-  ) {
-    // Check for negation: "cannot walk", "unable to walk"
-    if (!text.includes('cannot walk') && !text.includes('unable to walk') && !text.includes('not walking') && !text.includes('cant walk')) {
-      canWalk = true;
-    }
+  let mobilityStatus: 'WALKING' | 'IMPAIRED' | 'UNKNOWN' = 'UNKNOWN';
+
+  const walkingPositive = [
+    'walking', 'ambulatory', 'can walk', 'walks', 'able to walk', 'able to stand', 'walking wounded'
+  ];
+  const walkingNegative = [
+    'cannot walk', 'cant walk', 'unable to walk', 'not walking', 'cannot stand', 'cant stand', 'unable to stand',
+    'cannot move', 'cant move', 'unable to move', 'immobile', 'cannot get up', 'cant get up',
+    'cannot work', 'cant work', 'unable to work' // Common phonetic mistranscription of "can't walk" or functional distress
+  ];
+
+  if (walkingNegative.some(p => text.includes(p))) {
+    canWalk = false;
+    mobilityStatus = 'IMPAIRED';
+  } else if (walkingPositive.some(p => text.includes(p))) {
+    canWalk = true;
+    mobilityStatus = 'WALKING';
   }
 
   // 2. Spontaneous Breathing & Airway Check
@@ -138,6 +150,7 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
 
   // 5. Mental Status
   let mentalStatus: 'NORMAL' | 'ALTERED' | 'UNRESPONSIVE' = 'NORMAL';
+  let mentalStatusExplicit = false;
   const unresponsivePhrases = [
     'unresponsive', 'comatose', 'unconscious', 'no response', 'not responding', 'passed out'
   ];
@@ -152,19 +165,35 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
 
   if (unresponsivePhrases.some(p => text.includes(p))) {
     mentalStatus = 'UNRESPONSIVE';
+    mentalStatusExplicit = true;
   } else if (alteredPhrases.some(p => text.includes(p))) {
     mentalStatus = 'ALTERED';
+    mentalStatusExplicit = true;
   } else if (normalPhrases.some(p => text.includes(p))) {
     mentalStatus = 'NORMAL';
+    mentalStatusExplicit = true;
   }
 
   // 6. Common Injury, Orthopedic & Situational Distress Detections
   const injuries: string[] = [];
   const injuryPatterns = [
+    /injured in (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|wrists?|ankles?|knees?|hips?|ribs?)(?:\s+(?:and|&)\s+(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|wrists?|ankles?|knees?|hips?|ribs?))?/gi,
+    /injur(?:y|ies) (?:in|to|on) (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|wrists?|ankles?|knees?|hips?|ribs?)(?:\s+(?:and|&)\s+(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|wrists?|ankles?|knees?|hips?|ribs?))?/gi,
+    /(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?)\s+(?:is|are)?\s*(?:injured|hurt|swollen|in pain)/gi,
+    /hurt (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|knees?|wrists?|ankles?)(?:\s+(?:and|&)\s+(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?|knees?|wrists?|ankles?))?/gi,
+    /(?:hand|hands|leg|legs|arm|arms|foot|feet|head|chest|back|neck|shoulder|wrist|ankle|knee)\s+injur(?:y|ies)/gi,
+    /broken (?:hand|hands|leg|legs|arm|arms|hip|ankle|bone|bones|ribs?|femur|tibia|wrist|foot|feet|clavicle|collarbone)/gi,
+    /(?:hand|hands|leg|legs|arm|arms|hip|ankle|bone|bones|femur|tibia|wrist|foot|feet) (?:is|are)?\s*broken/gi,
+    /fractured? (?:hand|hands|leg|legs|arm|arms|hip|ankle|bone|bones|femur|tibia|pelvis|wrist|foot|feet|ribs?)/gi,
     /open (?:femur|tibia|arm|leg|bone) fracture/gi,
     /compound fracture/gi,
     /severe (?:bleeding|hemorrhage)/gi,
     /arterial (?:bleeding|bleed)/gi,
+    /bleeding from (?:my\s+)?(?:hand|hands|leg|legs|arm|arms|head|face|chest|ears?|mouth|nose|wound)/gi,
+    /wounds? (?:on|in) (?:my\s+)?(?:hand|hands|leg|legs|arm|arms|head|face|chest|back)/gi,
+    /cut on (?:my\s+)?(?:hand|hands|leg|legs|arm|arms|head|face)/gi,
+    /pain in (?:my\s+)?(?:hand|hands|leg|legs|arm|arms|chest|back|head|neck|shoulder|abdomen)/gi,
+    /severe pain/gi,
     /head (?:trauma|injury)/gi,
     /crush (?:injury|trauma)/gi,
     /burns?(?:\s*(?:first|second|third)\s*degree)?/gi,
@@ -174,9 +203,6 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
     /gunshot(?: wound)?/gi,
     /shrapnel(?: wound)?/gi,
     /penetrating (?:chest|abdominal) trauma/gi,
-    /broken (?:leg|arm|hip|ankle|bone|ribs?|femur|tibia)/gi,
-    /(?:leg|arm|hip|ankle|bone|femur|tibia) (?:is )?broken/gi,
-    /fractured? (?:leg|arm|hip|ankle|bone|femur|tibia|pelvis)/gi,
     /trapped(?: under rubble| in building| in debris| in vehicle| in elevator| in basement)?/gi,
     /pinned(?: down| under debris| under rubble)?/gi,
     /stuck under (?:rubble|debris|concrete|wall|tree)/gi,
@@ -218,12 +244,14 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
   return {
     ageGroup,
     canWalk,
+    mobilityStatus,
     isBreathingSpontaneous,
     breathingAfterAirwayOpen,
     respirationRate,
     radialPulsePresent,
     capillaryRefillSeconds,
     mentalStatus,
+    mentalStatusExplicit,
     injuries,
     allergiesMentioned,
     medicationsAdministeredMentioned,
@@ -250,6 +278,17 @@ export function extractAndEvaluateTriage(transcript: string): { observation: Str
   };
 
   const triageResult = evaluateTriage(vitalsInput);
+
+  // Provide enhanced clinical rationale if injuries or mobility impairment are present
+  if (triageResult.category === 'YELLOW') {
+    if (observation.injuries.length > 0 && observation.mobilityStatus === 'IMPAIRED') {
+      triageResult.rationale = `Non-ambulatory with localized trauma (${observation.injuries.join(', ')}). Respiratory & perfusion vitals are stable. Delayed evacuation / stretcher care indicated.`;
+    } else if (observation.injuries.length > 0) {
+      triageResult.rationale = `Localized trauma identified (${observation.injuries.join(', ')}). Vital signs stable; urgent wound/stretcher care indicated.`;
+    } else if (observation.mobilityStatus === 'IMPAIRED') {
+      triageResult.rationale = `Impaired mobility / non-ambulatory; vital signs stable. Requires stretcher transport.`;
+    }
+  }
 
   return {
     observation,

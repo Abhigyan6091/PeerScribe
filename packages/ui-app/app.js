@@ -75,7 +75,8 @@ async function loadBackendPatients() {
           id: p.doc.ephemeralId,
           patientId: p.doc.patientId,
           triage: p.activeTriage,
-          meta
+          meta,
+          injuries: p.doc.injuries ? p.doc.injuries.map(i => i.classification) : []
         };
       });
       renderCasualties();
@@ -147,12 +148,16 @@ async function assignTriage(category, autoAdvance = true) {
   if (existing) {
     existing.triage = category;
     existing.meta = activePatient.vitals || `Just assessed | Category: ${category}`;
+    if (activePatient.injuries && activePatient.injuries.length > 0) {
+      existing.injuries = activePatient.injuries;
+    }
   } else {
     casualties.unshift({
       id: activePatient.ephemeralId,
       patientId: activePatient.id,
       triage: category,
-      meta: activePatient.vitals || `Just assessed | Category: ${category}`
+      meta: activePatient.vitals || `Just assessed | Category: ${category}`,
+      injuries: activePatient.injuries || []
     });
   }
 
@@ -168,6 +173,22 @@ async function assignTriage(category, autoAdvance = true) {
 function updateActivePatientDisplay() {
   const idEl = document.getElementById('activePatientId');
   if (idEl) idEl.innerText = activePatient.ephemeralId;
+
+  const subEl = document.getElementById('activePatientSubtext');
+  if (subEl) subEl.innerText = activePatient.vitals || 'Awaiting clinical evaluation';
+
+  const injEl = document.getElementById('activePatientInjuries');
+  if (injEl) {
+    if (activePatient.injuries && activePatient.injuries.length > 0) {
+      injEl.innerHTML = activePatient.injuries.map(i => `
+        <span style="background: rgba(255, 26, 26, 0.2); border: 1px solid #FF1A1A; color: #FFAAAA; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">
+          ⚠️ ${i}
+        </span>
+      `).join('');
+    } else {
+      injEl.innerHTML = '';
+    }
+  }
 
   // Update visual identicon color
   const iconEl = document.getElementById('activeIdenticon');
@@ -187,6 +208,7 @@ function createNewIntakePatient(prefix = 'PENDING') {
     ephemeralId: nextId,
     triage: 'YELLOW',
     vitals: 'Awaiting clinical evaluation',
+    injuries: [],
     time: 'just now'
   };
 
@@ -217,13 +239,18 @@ function renderCasualties() {
     if (c.triage === 'GREEN') { borderColor = 'var(--triage-green)'; badgeText = 'MIN'; }
     if (c.triage === 'BLACK') { borderColor = 'var(--triage-black)'; badgeText = 'EXP'; }
 
+    const injBadges = (c.injuries && c.injuries.length > 0)
+      ? `<div style="display:flex; flex-wrap:wrap; gap:3px; margin-top:3px;">${c.injuries.map(i => `<span style="background:rgba(255,26,26,0.2); border:1px solid rgba(255,26,26,0.4); color:#FFAAAA; padding:0px 4px; border-radius:3px; font-size:0.68rem; font-weight:700;">⚠️ ${i}</span>`).join('')}</div>`
+      : '';
+
     return `
       <div class="casualty-item" style="border-left-color: ${borderColor}; cursor: pointer;" onclick="selectCasualty('${c.id}')" title="Click to inspect casualty">
-        <div>
+        <div style="flex: 1;">
           <div class="cas-id" style="color: ${borderColor};">${c.id}</div>
           <div class="cas-vitals">${c.meta}</div>
+          ${injBadges}
         </div>
-        <div style="font-weight: 800; color: ${borderColor};">${badgeText}</div>
+        <div style="font-weight: 800; color: ${borderColor}; align-self: flex-start; margin-left: 8px;">${badgeText}</div>
       </div>
     `;
   }).join('');
@@ -237,6 +264,7 @@ function selectCasualty(ephemeralId) {
     ephemeralId: target.id,
     triage: target.triage,
     vitals: target.meta,
+    injuries: target.injuries || [],
     time: 'current'
   };
   updateActivePatientDisplay();
@@ -528,22 +556,39 @@ async function evaluateCurrentTranscript() {
     // Offline / fallback calculation if backend not connected or returned error
     if (!result) {
       const lower = text.toLowerCase();
-      const isRed = lower.includes('absent') || lower.includes('34') || lower.includes('altered') || lower.includes('immediate');
+      const isRed = lower.includes('absent') || lower.includes('34') || lower.includes('altered') || lower.includes('immediate') || lower.includes('unconscious') || lower.includes('unresponsive');
       const isBlack = lower.includes('not breathing') || lower.includes('apnea') || lower.includes('expectant');
-      const isGreen = lower.includes('ambulatory') || lower.includes('walking');
+      const isGreen = (lower.includes('ambulatory') || lower.includes('walking')) && !lower.includes('not walking') && !lower.includes('cant walk') && !lower.includes('cannot walk') && !lower.includes('unable to walk');
+      const isImpaired = lower.includes('cannot walk') || lower.includes('cant walk') || lower.includes('unable to walk') || lower.includes('cannot work') || lower.includes('cant work') || lower.includes('unable to work') || lower.includes('cannot move') || lower.includes('cant move');
+      
       const category = isBlack ? 'BLACK' : isRed ? 'RED' : isGreen ? 'GREEN' : 'YELLOW';
       
+      const fallbackInjuries = [];
+      const injMatches = text.match(/injured in (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?)(?:\s+(?:and|&)\s+(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?))?/gi)
+        || text.match(/injur(?:y|ies) (?:in|to|on) (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?)/gi)
+        || text.match(/broken (?:hand|hands|leg|legs|arm|arms|hip|ankle|bone|bones|ribs?|femur|tibia)/gi)
+        || text.match(/trapped(?: under rubble| in building| in debris)?/gi);
+      if (injMatches) fallbackInjuries.push(...injMatches.map(m => m.trim()));
+
+      const hasPulseMention = lower.includes('pulse') || lower.includes('radial');
+      const pulseVal = hasPulseMention ? !lower.includes('absent') : undefined;
+      const hasMentalMention = lower.includes('altered') || lower.includes('confused') || lower.includes('alert') || lower.includes('conscious') || lower.includes('unresponsive');
+
       result = {
         observation: {
-          respirationRate: text.match(/\d+/)?.[0] ? parseInt(text.match(/\d+/)[0], 10) : 22,
-          radialPulsePresent: !lower.includes('absent'),
-          mentalStatus: lower.includes('altered') ? 'ALTERED' : 'NORMAL',
+          respirationRate: text.match(/\d+/)?.[0] ? parseInt(text.match(/\d+/)[0], 10) : undefined,
+          radialPulsePresent: pulseVal,
+          mentalStatus: lower.includes('altered') || lower.includes('confused') ? 'ALTERED' : lower.includes('unresponsive') ? 'UNRESPONSIVE' : 'NORMAL',
+          mentalStatusExplicit: hasMentalMention,
+          canWalk: isGreen,
+          mobilityStatus: isGreen ? 'WALKING' : isImpaired ? 'IMPAIRED' : 'UNKNOWN',
+          injuries: fallbackInjuries,
           ageGroup: lower.includes('child') || lower.includes('year old') ? 'PEDIATRIC' : 'ADULT'
         },
         triageResult: {
           category,
           protocolApplied: 'START_v1.0.0 (Local Offline Mode)',
-          reason: isBlack ? 'Apneic after airway opened' : isRed ? 'Vital sign trigger: Respiration or Perfusion compromised' : isGreen ? 'Ambulatory walking wounded' : 'Delayed evacuation status'
+          reason: isBlack ? 'Apneic after airway opened' : isRed ? 'Vital sign trigger: Respiration or Perfusion compromised' : isGreen ? 'Ambulatory walking wounded' : fallbackInjuries.length > 0 ? `Localized trauma (${fallbackInjuries.join(', ')}); vitals stable -> Stretcher care indicated` : 'Delayed evacuation status'
         }
       };
       await assignTriage(category, false);
@@ -555,8 +600,14 @@ async function evaluateCurrentTranscript() {
     // Update active patient vitals display with extracted values
     const obs = result.observation || {};
     const tri = result.triageResult || {};
-    const vitalsSummary = `RR: ${obs.respirationRate ?? 'Unrecorded'}/min | Radial: ${obs.radialPulsePresent === false ? 'ABSENT' : 'PRESENT'} | Mental: ${obs.mentalStatus || 'NORMAL'}`;
-    activePatient.vitals = vitalsSummary;
+    
+    const pulseStr = obs.radialPulsePresent === true ? 'Radial: PRESENT' : obs.radialPulsePresent === false ? 'Radial: ABSENT' : 'Radial: Unassessed';
+    const mentalStr = obs.mentalStatusExplicit ? `Mental: ${obs.mentalStatus}` : 'Mental: Normal (Unassessed)';
+    const rrStr = obs.respirationRate !== undefined ? `RR: ${obs.respirationRate}/min` : 'RR: Unrecorded';
+    const mobilityStr = obs.canWalk ? 'Ambulatory' : obs.mobilityStatus === 'IMPAIRED' ? 'Impaired Mobility' : 'Non-Ambulatory';
+
+    activePatient.vitals = `${rrStr} | ${pulseStr} | ${mentalStr} | ${mobilityStr}`;
+    activePatient.injuries = obs.injuries || [];
     updateActivePatientDisplay();
 
     // Cache to Edge AI Telemetry Log
@@ -576,6 +627,31 @@ async function evaluateCurrentTranscript() {
     if (evalOutput) {
       const badgeColor = tri.category === 'RED' ? '#FF1A1A' : tri.category === 'YELLOW' ? '#FFD600' : tri.category === 'GREEN' ? '#00E676' : '#6B7280';
       
+      const injuriesHtml = (obs.injuries && obs.injuries.length > 0)
+        ? `<div style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+             <span style="font-size: 0.72rem; color: #FFAAAA; font-weight: 700;">TRAUMA DETECTED:</span>
+             ${obs.injuries.map(i => `<span style="background: rgba(255, 26, 26, 0.25); border: 1px solid #FF1A1A; color: #FFAAAA; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">⚠️ ${i}</span>`).join('')}
+           </div>`
+        : '';
+
+      const pulseDisplay = obs.radialPulsePresent === false
+        ? '<strong style="color: #FF1A1A;">ABSENT</strong>'
+        : obs.radialPulsePresent === true
+          ? '<strong style="color: #00F5D4;">PRESENT</strong>'
+          : '<span style="color: #94A3B8;">Unassessed</span>';
+
+      const mentalDisplay = (obs.mentalStatus === 'ALTERED' || obs.mentalStatus === 'UNRESPONSIVE')
+        ? `<strong style="color: #FF1A1A;">${obs.mentalStatus}</strong>`
+        : obs.mentalStatusExplicit
+          ? '<strong style="color: #00F5D4;">NORMAL</strong>'
+          : '<span style="color: #94A3B8;">Normal (Unassessed)</span>';
+
+      const mobilityDisplay = obs.canWalk
+        ? '<strong style="color: #00E676;">Ambulatory (Walking)</strong>'
+        : obs.mobilityStatus === 'IMPAIRED'
+          ? '<strong style="color: #FFD600;">Impaired / Cannot Walk</strong>'
+          : '<span style="color: #94A3B8;">Non-Ambulatory</span>';
+
       evalOutput.style.display = 'block';
       evalOutput.style.borderLeftColor = badgeColor;
       evalOutput.innerHTML = `
@@ -586,11 +662,12 @@ async function evaluateCurrentTranscript() {
         <div style="color: #E2E8F0; font-size: 0.82rem; margin-bottom: 6px;">
           ${tri.reason || 'Clinical observation extracted.'}
         </div>
+        ${injuriesHtml}
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 0.74rem; color: #A0AEC0; background: #0E121A; padding: 6px; border-radius: 4px;">
           <div>RR: <strong style="color: #FFF;">${obs.respirationRate ?? 'Unrecorded'}</strong></div>
-          <div>Radial Pulse: <strong style="color: ${obs.radialPulsePresent === false ? '#FF1A1A' : '#00F5D4'};">${obs.radialPulsePresent === false ? 'ABSENT' : obs.radialPulsePresent === true ? 'PRESENT' : 'Normal'}</strong></div>
-          <div>Mental: <strong style="color: #FFF;">${obs.mentalStatus || 'NORMAL'}</strong></div>
-          <div>Age: <strong style="color: #FFF;">${obs.ageGroup || 'ADULT'}</strong></div>
+          <div>Radial Pulse: ${pulseDisplay}</div>
+          <div>Mental: ${mentalDisplay}</div>
+          <div>Mobility: ${mobilityDisplay}</div>
         </div>
         <div style="font-size: 0.7rem; color: #00F5D4; margin-top: 6px; display: flex; align-items: center; gap: 4px;">
           <span>✓</span> SQLite WAL Committed | Wire CRC32 Verified | DTN Outbox Enqueued
@@ -974,20 +1051,50 @@ function renderTelemetryView() {
       container.innerHTML = '<div style="color: #6B7285;">Awaiting Edge AI speech extractions... Click Push To Talk or select a preset chip above to inspect parsed observations.</div>';
       return;
     }
-    container.innerHTML = aiLogsCache.map(entry => `
-      <div class="tele-card" style="border-left-color: ${entry.triageResult?.category === 'RED' ? '#FF1A1A' : entry.triageResult?.category === 'YELLOW' ? '#FFD600' : '#00E676'};">
-        <div class="tele-field">
-          <strong style="color: #00F5D4;">[AI EXTRACTOR] ${entry.patientId || 'Casualty'}</strong>
-          <span style="color: #94A3B8;">${entry.timeStr}</span>
+    container.innerHTML = aiLogsCache.map(entry => {
+      const obs = entry.observation || {};
+      const tri = entry.triageResult || {};
+
+      const pulseTag = obs.radialPulsePresent === true
+        ? '<strong style="color: #00F5D4;">PRESENT</strong>'
+        : obs.radialPulsePresent === false
+          ? '<strong style="color: #FF1A1A;">ABSENT</strong>'
+          : '<span style="color: #94A3B8;">UNASSESSED</span>';
+
+      const mentalTag = (obs.mentalStatus === 'ALTERED' || obs.mentalStatus === 'UNRESPONSIVE')
+        ? `<strong style="color: #FF1A1A;">${obs.mentalStatus}</strong>`
+        : obs.mentalStatusExplicit
+          ? '<strong style="color: #00F5D4;">NORMAL</strong>'
+          : '<span style="color: #94A3B8;">UNASSESSED (Presumed Normal)</span>';
+
+      const mobilityTag = obs.canWalk
+        ? '<strong style="color: #00E676;">Ambulatory (Walking)</strong>'
+        : obs.mobilityStatus === 'IMPAIRED'
+          ? '<strong style="color: #FFD600;">Non-Ambulatory (Impaired / Cannot Walk/Work)</strong>'
+          : '<span style="color: #94A3B8;">Non-Ambulatory</span>';
+
+      const injuriesRow = (obs.injuries && obs.injuries.length > 0)
+        ? `<div class="tele-field"><span>Extracted Trauma:</span> <div style="display:inline-flex; flex-wrap:wrap; gap:4px;">${obs.injuries.map(i => `<span style="background:rgba(255,26,26,0.25); border:1px solid #FF1A1A; color:#FFAAAA; padding:1px 6px; border-radius:3px; font-size:0.75rem; font-weight:700;">⚠️ ${i}</span>`).join('')}</div></div>`
+        : '';
+
+      return `
+        <div class="tele-card" style="border-left-color: ${tri.category === 'RED' ? '#FF1A1A' : tri.category === 'YELLOW' ? '#FFD600' : '#00E676'};">
+          <div class="tele-field">
+            <strong style="color: #00F5D4;">[AI EXTRACTOR] ${entry.patientId || 'Casualty'}</strong>
+            <span style="color: #94A3B8;">${entry.timeStr}</span>
+          </div>
+          <div class="tele-field"><span>Raw Spoken Audio:</span> <em style="color: #F8FAFC;">"${entry.transcript}"</em></div>
+          ${injuriesRow}
+          <div class="tele-field"><span>Functional Mobility:</span> ${mobilityTag}</div>
+          <div class="tele-field"><span>Extracted Vitals:</span> <code style="color: #A5F3FC;">RR: ${obs.respirationRate ?? 'UNRECORDED'}/min | Radial Pulse: ${pulseTag} | Mental: ${mentalTag}</code></div>
+          <div class="tele-field"><span>Rule Execution:</span> <strong style="color: ${tri.category === 'RED' ? '#FF1A1A' : '#FFD600'};">${tri.category}</strong> (${tri.reason || 'Evaluated'})</div>
+          <div style="color: #64748B; font-size: 0.7rem; margin-top: 3px;">
+            Confidence Score: 0.95 | SQLite WAL Committed: Yes | Protocol: ${tri.protocolApplied || 'START_v1.0.0'}
+          </div>
         </div>
-        <div class="tele-field"><span>Raw Spoken Audio:</span> <em style="color: #F8FAFC;">"${entry.transcript}"</em></div>
-        <div class="tele-field"><span>Extracted Vitals:</span> <code style="color: #A5F3FC;">RR: ${entry.observation?.respirationRate ?? 'N/A'}/min | Radial Pulse: ${entry.observation?.radialPulsePresent === false ? 'ABSENT' : 'PRESENT'} | Mental: ${entry.observation?.mentalStatus || 'NORMAL'}</code></div>
-        <div class="tele-field"><span>Rule Execution:</span> <strong style="color: ${entry.triageResult?.category === 'RED' ? '#FF1A1A' : '#FFD600'};">${entry.triageResult?.category}</strong> (${entry.triageResult?.reason || 'Evaluated'})</div>
-        <div style="color: #64748B; font-size: 0.7rem; margin-top: 3px;">
-          Confidence Score: 0.95 | SQLite WAL Committed: Yes | Protocol: ${entry.triageResult?.protocolApplied || 'START_v1.0.0'}
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
+  }
   } else if (currentTeleTab === 'nostr') {
     if (nostrEventsCache.length === 0) {
       container.innerHTML = '<div style="color: #6B7285;">Awaiting Nostr Kind 20042 mesh sync events.</div>';
