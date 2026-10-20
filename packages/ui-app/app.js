@@ -6,7 +6,9 @@
 
 const API_BASE = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:4321';
 const PHONETIC_ANIMALS = ['PANTHER', 'FALCON', 'WOLF', 'OTTER', 'BADGER', 'HAWK', 'BEAR', 'VIPER'];
-let currentMode = 'EMERGENCY'; // EMERGENCY | FIELD | DORMANT
+let currentMode = 'FIELD'; // EMERGENCY | FIELD | DORMANT
+let currentBackendNodeId = null;
+let telemetryInterval = null;
 let isRecording = false;
 let isBackendConnected = false;
 
@@ -32,35 +34,34 @@ async function initBackendConnection() {
     if (res.ok) {
       isBackendConnected = true;
       const status = await res.json();
-      console.log('[PeerScribe UI] Connected to live daemon:', status.nodeId);
+      currentBackendNodeId = status.nodeId;
+      console.log('[PeerScribe UI] Connected to live daemon:', status.nodeId, 'Initial mode:', status.currentMode);
       
-      const meshStatusEl = document.getElementById('meshStatus');
-      if (meshStatusEl) {
-        meshStatusEl.innerText = `Mesh Node: ${status.nodeId.substring(0, 12)} | Mode: ${status.currentMode}`;
-      }
+      // Synchronize operational mode from daemon
+      updateModeBadge(status.currentMode);
 
       await loadBackendPatients();
       setupSseStream();
     }
   } catch (err) {
     console.warn('[PeerScribe UI] Running in standalone offline simulation mode.');
+    updateModeBadge(currentMode);
   }
 }
 
 async function loadBackendPatients() {
+  if (!isBackendConnected) return;
   try {
     const res = await fetch(`${API_BASE}/api/v1/patients`);
     if (res.ok) {
       const remotePatients = await res.json();
-      if (remotePatients.length > 0) {
-        casualties = remotePatients.map(p => ({
-          id: p.doc.ephemeralId,
-          patientId: p.doc.patientId,
-          triage: p.activeTriage,
-          meta: `Observed ${p.doc.vitals?.length || 0} vitals | Updated ${new Date(p.doc.createdAt).toLocaleTimeString()}`
-        }));
-        renderCasualties();
-      }
+      casualties = remotePatients.map(p => ({
+        id: p.doc.ephemeralId,
+        patientId: p.doc.patientId,
+        triage: p.activeTriage,
+        meta: `Observed ${p.doc.vitals?.length || 0} vitals | Updated ${new Date(p.doc.createdAt).toLocaleTimeString()}`
+      }));
+      renderCasualties();
     }
   } catch (err) {
     // Ignore in offline mode
@@ -70,6 +71,10 @@ async function loadBackendPatients() {
 function setupSseStream() {
   try {
     const evtSource = new EventSource(`${API_BASE}/api/v1/events`);
+    evtSource.addEventListener('patientCreated', (e) => {
+      loadBackendPatients();
+    });
+
     evtSource.addEventListener('patientUpdated', (e) => {
       const data = JSON.parse(e.data);
       console.log('[SSE] Patient updated:', data);
@@ -82,13 +87,17 @@ function setupSseStream() {
 
     evtSource.addEventListener('modeChanged', (e) => {
       const data = JSON.parse(e.data);
+      console.log('[SSE] Mode changed from daemon:', data.newMode);
       updateModeBadge(data.newMode);
     });
 
-    evtSource.addEventListener('emergencyWiped', () => {
-      casualties.length = 0;
-      renderCasualties();
-      document.getElementById('activePatientId').innerText = 'WIPED-00';
+    evtSource.addEventListener('emergencyWiped', (e) => {
+      console.log('[SSE] Emergency Wipe received from daemon');
+      try {
+        const data = JSON.parse(e.data);
+        if (data.newNodeId) currentBackendNodeId = data.newNodeId;
+      } catch (err) {}
+      resetFrontendState();
     });
   } catch (err) {
     console.warn('[SSE] EventSource unavailable.');
@@ -172,6 +181,15 @@ function renderCasualties() {
   const listEl = document.getElementById('casualtyList');
   if (!listEl) return;
 
+  if (casualties.length === 0) {
+    listEl.innerHTML = `
+      <div style="padding: 20px 12px; text-align: center; color: var(--text-muted); font-size: 0.85rem; background: var(--bg-surface); border-radius: 4px; border: 1px dashed rgba(255,255,255,0.1);">
+        No active casualties recorded in mesh database.
+      </div>
+    `;
+    return;
+  }
+
   const severityRank = { RED: 4, YELLOW: 3, GREEN: 2, BLACK: 1 };
   const sorted = [...casualties].sort((a, b) => (severityRank[b.triage] || 0) - (severityRank[a.triage] || 0));
 
@@ -183,7 +201,7 @@ function renderCasualties() {
     if (c.triage === 'BLACK') { borderColor = 'var(--triage-black)'; badgeText = 'EXP'; }
 
     return `
-      <div class="casualty-item" style="border-left-color: ${borderColor};">
+      <div class="casualty-item" style="border-left-color: ${borderColor}; cursor: pointer;" onclick="selectCasualty('${c.id}')" title="Click to inspect casualty">
         <div>
           <div class="cas-id" style="color: ${borderColor};">${c.id}</div>
           <div class="cas-vitals">${c.meta}</div>
@@ -192,6 +210,19 @@ function renderCasualties() {
       </div>
     `;
   }).join('');
+}
+
+function selectCasualty(ephemeralId) {
+  const target = casualties.find(c => c.id === ephemeralId);
+  if (!target) return;
+  activePatient = {
+    id: target.patientId || `pt_${Date.now()}`,
+    ephemeralId: target.id,
+    triage: target.triage,
+    vitals: target.meta,
+    time: 'current'
+  };
+  updateActivePatientDisplay();
 }
 
 // =========================================================================
@@ -588,34 +619,125 @@ function clearVoiceInput() {
 
 async function toggleOperationalMode() {
   let nextMode = 'EMERGENCY';
-  if (currentMode === 'EMERGENCY') nextMode = 'FIELD';
-  else if (currentMode === 'FIELD') nextMode = 'DORMANT';
-  else nextMode = 'EMERGENCY';
+  if (currentMode === 'FIELD') nextMode = 'EMERGENCY';
+  else if (currentMode === 'EMERGENCY') nextMode = 'DORMANT';
+  else if (currentMode === 'DORMANT') nextMode = 'FIELD';
 
+  await setMode(nextMode);
+}
+
+async function setMode(targetMode) {
   if (isBackendConnected) {
     try {
-      await fetch(`${API_BASE}/api/v1/mode`, {
+      const res = await fetch(`${API_BASE}/api/v1/mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: nextMode })
+        body: JSON.stringify({ mode: targetMode })
       });
+      if (res.ok) {
+        const data = await res.json();
+        updateModeBadge(data.currentMode);
+        return;
+      }
     } catch (err) {
-      // offline fallback
+      console.warn('[Mode] Failed to sync mode to backend daemon:', err);
     }
   }
-
-  updateModeBadge(nextMode);
+  // Offline fallback or immediate update
+  updateModeBadge(targetMode);
 }
 
 function updateModeBadge(mode) {
   currentMode = mode;
   const badge = document.getElementById('modeBadge');
-  if (!badge) return;
+  const meshStatusEl = document.getElementById('meshStatus');
+  const pulseDot = document.getElementById('modePulseDot') || document.querySelector('.pulse-dot');
+  const dormantBanner = document.getElementById('dormantBanner');
 
-  badge.innerText = mode;
-  if (mode === 'EMERGENCY') badge.style.background = 'var(--mode-emergency)';
-  else if (mode === 'FIELD') badge.style.background = 'var(--mode-field)';
-  else badge.style.background = 'var(--mode-dormant)';
+  // Update top badge
+  if (badge) {
+    badge.setAttribute('data-mode', mode);
+    if (mode === 'EMERGENCY') {
+      badge.innerHTML = '🚨 EMERGENCY <span style="font-size:0.65rem;opacity:0.8;">⟳</span>';
+      badge.style.background = 'var(--mode-emergency)';
+      badge.style.boxShadow = '0 0 12px rgba(229, 62, 62, 0.6)';
+      if (pulseDot) {
+        pulseDot.style.background = '#FF1A1A';
+        pulseDot.style.boxShadow = '0 0 10px #FF1A1A';
+        pulseDot.style.animation = 'pulse 0.8s infinite';
+      }
+      if (dormantBanner) dormantBanner.style.display = 'none';
+    } else if (mode === 'FIELD') {
+      badge.innerHTML = '📡 FIELD <span style="font-size:0.65rem;opacity:0.8;">⟳</span>';
+      badge.style.background = 'var(--mode-field)';
+      badge.style.boxShadow = '0 0 12px rgba(49, 130, 206, 0.4)';
+      if (pulseDot) {
+        pulseDot.style.background = 'var(--mesh-active)';
+        pulseDot.style.boxShadow = '0 0 8px var(--mesh-active)';
+        pulseDot.style.animation = 'pulse 1.8s infinite';
+      }
+      if (dormantBanner) dormantBanner.style.display = 'none';
+    } else if (mode === 'DORMANT') {
+      badge.innerHTML = '💤 DORMANT <span style="font-size:0.65rem;opacity:0.8;">⟳</span>';
+      badge.style.background = 'var(--mode-dormant)';
+      badge.style.boxShadow = 'none';
+      if (pulseDot) {
+        pulseDot.style.background = '#6B7285';
+        pulseDot.style.boxShadow = 'none';
+        pulseDot.style.animation = 'pulse 4s infinite';
+      }
+      if (dormantBanner) dormantBanner.style.display = 'flex';
+    }
+  }
+
+  // Update mode pills in operation card
+  ['Field', 'Emergency', 'Dormant'].forEach(m => {
+    const pill = document.getElementById(`pill${m}`);
+    if (pill) {
+      pill.className = 'mode-pill';
+      if (m.toUpperCase() === mode) {
+        pill.classList.add(`active-mode-${m.toLowerCase()}`);
+      }
+    }
+  });
+
+  // Update subtitle
+  if (meshStatusEl) {
+    const nodeShort = currentBackendNodeId ? currentBackendNodeId.substring(0, 12) : 'local';
+    if (mode === 'EMERGENCY') {
+      meshStatusEl.innerText = `Node: ${nodeShort} | EMERGENCY (High-Alert / 1.2s Poll)`;
+      meshStatusEl.style.borderColor = 'var(--mode-emergency)';
+      meshStatusEl.style.color = '#FEB2B2';
+    } else if (mode === 'FIELD') {
+      meshStatusEl.innerText = `Node: ${nodeShort} | FIELD (Standard Mesh / 3s Poll)`;
+      meshStatusEl.style.borderColor = 'var(--mesh-active)';
+      meshStatusEl.style.color = 'var(--mesh-active)';
+    } else if (mode === 'DORMANT') {
+      meshStatusEl.innerText = `Node: ${nodeShort} | DORMANT (Power-Save <0.3%/hr / Radios Idle)`;
+      meshStatusEl.style.borderColor = 'var(--mode-dormant)';
+      meshStatusEl.style.color = '#A0AEC0';
+    }
+  }
+
+  // Dynamically adapt polling rate based on tri-modal power state
+  adjustTelemetryPollingRate(mode);
+}
+
+function adjustTelemetryPollingRate(mode) {
+  if (telemetryInterval) {
+    clearInterval(telemetryInterval);
+    telemetryInterval = null;
+  }
+
+  let delayMs = 3000;
+  if (mode === 'EMERGENCY') delayMs = 1200;
+  else if (mode === 'FIELD') delayMs = 3000;
+  else if (mode === 'DORMANT') delayMs = 15000;
+
+  telemetryInterval = setInterval(() => {
+    refreshTelemetry();
+    loadBackendPatients();
+  }, delayMs);
 }
 
 function openDivergenceModal() {
@@ -644,14 +766,75 @@ async function triggerEmergencyWipe() {
       try {
         await fetch(`${API_BASE}/api/v1/security/wipe`, { method: 'POST' });
       } catch (err) {
-        // offline fallback
+        console.warn('[Wipe] Backend wipe call failed:', err);
       }
     }
-    casualties.length = 0;
-    renderCasualties();
-    document.getElementById('activePatientId').innerText = 'WIPED-00';
-    document.getElementById('meshStatus').innerText = '0 Peers (Isolated)';
+    resetFrontendState();
     alert('✅ ZEROIZATION COMPLETE: All memory keys scrubbed, SQLite WAL sanitized, node uninitialized.');
+  }
+}
+
+function resetFrontendState() {
+  // 1. Clear casualties array and re-render empty state
+  casualties = [];
+  renderCasualties();
+
+  // 2. Clear all telemetry caches
+  wirePacketsCache = [];
+  auditTrailCache = [];
+  dtnBundlesCache = [];
+  nostrEventsCache = [];
+  aiLogsCache = [];
+  consoleLogsCache = [];
+
+  // 3. Reset badge counters in UI
+  const wireCountEl = document.getElementById('wireCount');
+  if (wireCountEl) wireCountEl.innerText = '0';
+  const auditCountEl = document.getElementById('auditCount');
+  if (auditCountEl) auditCountEl.innerText = '0';
+  const dtnCountEl = document.getElementById('dtnCount');
+  if (dtnCountEl) dtnCountEl.innerText = '0';
+  const aiCountEl = document.getElementById('aiCount');
+  if (aiCountEl) aiCountEl.innerText = '0';
+
+  // 4. Re-render telemetry view
+  renderTelemetryView();
+
+  // 5. Reset active casualty intake display
+  activePatient = {
+    id: `pt_${Date.now()}`,
+    ephemeralId: 'WIPED-00',
+    triage: 'BLACK',
+    vitals: 'Node zeroized — awaiting new casualty intake',
+    time: 'just now'
+  };
+  const idEl = document.getElementById('activePatientId');
+  if (idEl) idEl.innerText = 'WIPED-00';
+  const iconEl = document.getElementById('activeIdenticon');
+  if (iconEl) {
+    iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/></svg>`;
+  }
+
+  // 6. Stop any active recording and clear voice inputs/eval
+  if (isRecording) {
+    toggleVoiceRecording();
+  }
+  clearVoiceInput();
+  const evalOutput = document.getElementById('voiceEvalOutput');
+  if (evalOutput) {
+    evalOutput.style.display = 'none';
+    evalOutput.innerHTML = '';
+  }
+
+  // 7. Hide divergence banner and close modal
+  const divBanner = document.getElementById('divergenceBanner');
+  if (divBanner) divBanner.style.display = 'none';
+  closeDivergenceModal();
+
+  // 8. Update mesh status bar
+  const meshStatusEl = document.getElementById('meshStatus');
+  if (meshStatusEl) {
+    meshStatusEl.innerText = '0 Peers (Isolated / Zeroized)';
   }
 }
 
@@ -836,6 +1019,4 @@ window.addEventListener('keydown', (e) => {
 
 initBackendConnection().then(() => {
   refreshTelemetry();
-  // Poll telemetry every 3s
-  setInterval(refreshTelemetry, 3000);
 });

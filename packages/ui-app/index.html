@@ -55,9 +55,73 @@
       font-size: 0.8rem;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      background: var(--mode-emergency);
+      background: var(--mode-field);
       color: #FFF;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      transition: all 0.2s ease;
+    }
+    .mode-badge:hover {
+      filter: brightness(1.2);
+      transform: translateY(-1px);
+    }
+    .mode-pills-row {
+      display: flex;
+      gap: 4px;
+      margin-top: 2px;
+    }
+    .mode-pill {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 3px 8px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .mode-pill:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #FFF;
+    }
+    .mode-pill.active-mode-field {
+      background: var(--mode-field);
+      color: #FFF;
+      border-color: #63B3ED;
+      box-shadow: 0 0 8px rgba(49, 130, 206, 0.5);
+    }
+    .mode-pill.active-mode-emergency {
+      background: var(--mode-emergency);
+      color: #FFF;
+      border-color: #FEB2B2;
+      box-shadow: 0 0 8px rgba(229, 62, 62, 0.6);
+    }
+    .mode-pill.active-mode-dormant {
+      background: var(--mode-dormant);
+      color: #FFF;
+      border-color: #A0AEC0;
+      box-shadow: 0 0 8px rgba(74, 85, 104, 0.5);
+    }
+    .dormant-banner {
+      display: none;
+      background: #181D28;
+      border: 1px dashed var(--mode-dormant);
+      border-radius: var(--border-radius-tactical);
+      padding: 10px 14px;
+      font-size: 0.8rem;
+      color: #CBD5E0;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .dormant-banner:hover {
+      background: #232B3B;
     }
 
     /* Operation Info Header */
@@ -405,6 +469,13 @@
       padding: 8px 12px;
       border-radius: 4px;
       cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .wipe-btn:hover {
+      background: rgba(255, 0, 85, 0.2);
+      border-color: #FF0055;
+      color: #FFF;
+      box-shadow: 0 0 10px rgba(255, 0, 85, 0.4);
     }
 
     /* Modal Styles */
@@ -496,20 +567,33 @@
     <!-- Top Tactical Header -->
     <header class="tactical-bar">
       <div class="brand-title">
-        <div class="pulse-dot"></div>
+        <div class="pulse-dot" id="modePulseDot"></div>
         PEERSCRIBE
       </div>
-      <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()">EMERGENCY</div>
+      <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()" title="Click to cycle modes: FIELD → EMERGENCY → DORMANT">FIELD</div>
     </header>
 
     <!-- Operation Context Card -->
     <section class="operation-card">
-      <div>
+      <div style="flex: 1;">
         <div class="op-name">District 4 Disaster Response #001</div>
         <div class="op-meta">Sector Geohash: <strong style="color:#FFF;">u15ek200</strong> | 27.7172° N, 85.3240° E</div>
       </div>
-      <div class="mesh-badge" id="meshStatus">3 Peers Active</div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+        <div class="mesh-badge" id="meshStatus">Mesh Node: local | Mode: FIELD</div>
+        <div class="mode-pills-row">
+          <button type="button" class="mode-pill active-mode-field" id="pillField" onclick="setMode('FIELD')">FIELD</button>
+          <button type="button" class="mode-pill" id="pillEmergency" onclick="setMode('EMERGENCY')">EMERGENCY</button>
+          <button type="button" class="mode-pill" id="pillDormant" onclick="setMode('DORMANT')">DORMANT</button>
+        </div>
+      </div>
     </section>
+
+    <!-- Dormant Power-Save Warning Banner -->
+    <div id="dormantBanner" class="dormant-banner" onclick="setMode('FIELD')">
+      <span>💤 <strong>DORMANT POWER-SAVE ACTIVE:</strong> Background radios &amp; telemetry throttled (&lt;0.3%/hr drain).</span>
+      <span style="text-decoration: underline; font-weight: 700; margin-left: 8px;">Tap to Wake (FIELD)</span>
+    </div>
 
     <!-- Semantic Divergence Alert Banner -->
     <div id="divergenceBanner" class="divergence-banner" onclick="openDivergenceModal()">

@@ -118,4 +118,12 @@ export class NostrGatewayService {
   hasEvent(eventId: string): boolean {
     return this.knownEventIds.has(eventId);
   }
+
+  /**
+   * Clear all deduplication cache upon emergency wipe.
+   */
+  clear(): void {
+    this.knownEventIds.clear();
+    this.isGatewayActive = false;
+  }
 }

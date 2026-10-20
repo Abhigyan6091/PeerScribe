@@ -215,6 +215,19 @@ export class PeerScribeDatabase {
     return stmt.all(patientId) as any[];
   }
 
+  purgeAllData(): void {
+    this.db.exec('PRAGMA foreign_keys = OFF;');
+    this.db.exec(`
+      DELETE FROM patient_documents;
+      DELETE FROM clinical_audit_trail;
+      DELETE FROM dtn_outbox;
+      DELETE FROM peer_registry;
+      DELETE FROM operations;
+      VACUUM;
+    `);
+    this.db.exec('PRAGMA foreign_keys = ON;');
+  }
+
   close(): void {
     this.db.close();
   }

@@ -122,13 +122,83 @@ test('Backend Service Daemon: HTTP Server API Endpoints', async () => {
     const triageData = await triageRes.json() as any;
     assert.strictEqual(triageData.activeTriage, 'YELLOW');
 
-    // 6. GET /api/v1/patients
-    const listRes = await fetch(`${baseUrl}/api/v1/patients`);
-    assert.strictEqual(listRes.status, 200);
-    const listData = await listRes.json() as any;
-    assert.strictEqual(listData.length, 1);
-    assert.strictEqual(listData[0].activeTriage, 'YELLOW');
+    // 7. POST /api/v1/security/wipe
+    const wipeRes = await fetch(`${baseUrl}/api/v1/security/wipe`, { method: 'POST' });
+    assert.strictEqual(wipeRes.status, 200);
+    const wipeData = await wipeRes.json() as any;
+    assert.strictEqual(wipeData.zeroized, true);
+
+    // Verify patients are empty after wipe
+    const postWipePatientsRes = await fetch(`${baseUrl}/api/v1/patients`);
+    const postWipePatients = await postWipePatientsRes.json() as any[];
+    assert.strictEqual(postWipePatients.length, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('Backend Service Daemon: Emergency Wipe Complete Database & State Zeroization', () => {
+  const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
+  
+  // Populate state: patient, vitals, audit logs, wire packets, DTN bundle
+  const patient = daemon.createPatient('RED-WIPETEST-01');
+  daemon.recordTriage(patient.patientId, 'RED', 'START_v1.0.0');
+  daemon.recordVitals(patient.patientId, { respirationRate: 32 });
+
+  assert.strictEqual(daemon.listPatients().length, 1);
+  assert.ok(daemon.recentWirePackets.length > 0);
+  assert.ok(daemon.recentActivityLogs.length > 0);
+
+  const oldNodeId = daemon.nodeId;
+  let sseWipedEmitted = false;
+  daemon.on('emergencyWiped', (data) => {
+    sseWipedEmitted = true;
+    assert.ok(data.timestamp > 0);
+    assert.ok(data.targetsWiped.includes('SqliteRelationalStorage'));
+    assert.ok(data.targetsWiped.includes('DtnOutboxQueue'));
+    assert.ok(data.targetsWiped.includes('SessionEphemeralKeysAndLogs'));
+  });
+
+  // Execute wipe
+  const success = daemon.triggerEmergencyWipe();
+  assert.strictEqual(success, true);
+  assert.strictEqual(sseWipedEmitted, true);
+
+  // Assert SQLite database is completely purged
+  assert.strictEqual(daemon.listPatients().length, 0);
+  assert.strictEqual(daemon.db.listPatientDocuments(daemon.currentOperationId).length, 0);
+  assert.strictEqual(daemon.db.listPendingDtnBundles(daemon.currentOperationId).length, 0);
+  assert.strictEqual(daemon.db.getAuditTrail(patient.patientId).length, 0);
+
+  // Assert memory buffers zeroized
+  assert.strictEqual(daemon.recentWirePackets.length, 0);
+  assert.strictEqual(daemon.recentNostrEvents.length, 0);
+  assert.strictEqual(daemon.recentActivityLogs.length, 0);
+
+  // Assert new identity generated
+  assert.notStrictEqual(daemon.nodeId, oldNodeId);
+});
+
+test('Backend Service Daemon: Tri-Modal Power Transitions & Gateway Adaptation', () => {
+  const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
+  assert.strictEqual(daemon.currentMode, 'FIELD');
+
+  let modeEventCount = 0;
+  daemon.on('modeChanged', () => { modeEventCount++; });
+
+  // Transition to DORMANT -> Nostr Gateway deactivated to conserve power (<0.3%/hr)
+  daemon.transitionMode('DORMANT');
+  assert.strictEqual(daemon.currentMode, 'DORMANT');
+  assert.strictEqual(daemon.nostrGateway.isGatewayActive, false);
+
+  // Transition to EMERGENCY -> Nostr Gateway activated, high-alert
+  daemon.transitionMode('EMERGENCY');
+  assert.strictEqual(daemon.currentMode, 'EMERGENCY');
+  assert.strictEqual(daemon.nostrGateway.isGatewayActive, true);
+
+  // Transition to FIELD
+  daemon.transitionMode('FIELD');
+  assert.strictEqual(daemon.currentMode, 'FIELD');
+
+  assert.strictEqual(modeEventCount, 3);
 });

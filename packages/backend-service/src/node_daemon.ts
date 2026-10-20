@@ -64,10 +64,10 @@ export interface ActivityLogEntry {
 }
 
 export class PeerScribeDaemon extends EventEmitter {
-  public readonly nodeId: string;
-  public readonly keyPair: IdentityKeyPair;
+  public nodeId: string;
+  public keyPair: IdentityKeyPair;
   public readonly db: PeerScribeDatabase;
-  public readonly dtnOutbox: DtnOutboxQueue;
+  public dtnOutbox: DtnOutboxQueue;
   public readonly nostrGateway: NostrGatewayService;
   public readonly wipeService: EmergencyWipeService;
   
@@ -84,7 +84,7 @@ export class PeerScribeDaemon extends EventEmitter {
   constructor(config: DaemonConfig = {}) {
     super();
     this.keyPair = generateIdentityKeyPair();
-    this.nodeId = config.nodeId || `node_${this.keyPair.publicKey.substring(0, 8)}`;
+    this.nodeId = config.nodeId || `node_${this.keyPair.publicKey.slice(-8)}`;
     this.currentMode = config.initialMode || 'FIELD';
     this.currentOperationId = config.operationId || 'OP-TACTICAL-ALPHA';
 
@@ -95,13 +95,40 @@ export class PeerScribeDaemon extends EventEmitter {
     this.nostrGateway = new NostrGatewayService();
     this.wipeService = new EmergencyWipeService();
 
-    // Register wipe targets
+    // Register comprehensive wipe targets
     this.wipeService.registerTarget({
-      name: 'SessionEphemeralKeys',
+      name: 'SqliteRelationalStorage',
+      wipe: () => {
+        this.db.purgeAllData();
+        this.db.createOperation(this.currentOperationId, 'Operation Rapid Angel', this.sectorGeohash);
+      }
+    });
+
+    this.wipeService.registerTarget({
+      name: 'DtnOutboxQueue',
+      wipe: () => {
+        this.dtnOutbox = new DtnOutboxQueue();
+      }
+    });
+
+    this.wipeService.registerTarget({
+      name: 'SessionEphemeralKeysAndLogs',
       wipe: () => {
         this.recentWirePackets = [];
         this.recentNostrEvents = [];
         this.recentActivityLogs = [];
+        this.nostrGateway.clear();
+        if (this.particleFilter) {
+          this.initParticleFilter(27.7172, 85.3240);
+        }
+      }
+    });
+
+    this.wipeService.registerTarget({
+      name: 'IdentityKeyPairRegeneration',
+      wipe: () => {
+        this.keyPair = generateIdentityKeyPair();
+        this.nodeId = `node_${this.keyPair.publicKey.slice(-8)}`;
       }
     });
 
@@ -133,6 +160,11 @@ export class PeerScribeDaemon extends EventEmitter {
   transitionMode(newMode: OperationalMode): OperationalMode {
     const oldMode = this.currentMode;
     this.currentMode = newMode;
+    if (newMode === 'DORMANT') {
+      this.nostrGateway.setInternetConnectivity(false);
+    } else if (newMode === 'EMERGENCY') {
+      this.nostrGateway.setInternetConnectivity(true);
+    }
     console.log(`\x1b[35m[MODE CHANGE]\x1b[0m Node transitioned from ${oldMode} -> \x1b[1m${newMode}\x1b[0m`);
     this.logActivity('SECURITY', `Mode Transition: ${oldMode} -> ${newMode}`, { oldMode, newMode });
     this.emit('modeChanged', { oldMode, newMode, timestamp: Date.now() });
@@ -435,9 +467,13 @@ export class PeerScribeDaemon extends EventEmitter {
   }
 
   triggerEmergencyWipe(): boolean {
-    const success = this.wipeService.executeEmergencyWipe();
-    console.log(`\x1b[41m\x1b[37m[EMERGENCY WIPE]\x1b[0m All memory keys zeroized, state scrubbed.\x1b[0m`);
-    this.emit('emergencyWiped', { timestamp: Date.now() });
-    return success;
+    const receipt = this.wipeService.executeEmergencyWipe();
+    console.log(`\x1b[41m\x1b[37m[EMERGENCY WIPE]\x1b[0m All memory keys zeroized, state scrubbed: ${receipt.targetsWiped.join(', ')}\x1b[0m`);
+    this.emit('emergencyWiped', {
+      timestamp: Date.now(),
+      targetsWiped: receipt.targetsWiped,
+      newNodeId: this.nodeId
+    });
+    return receipt.success;
   }
 }
