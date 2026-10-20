@@ -224,6 +224,80 @@ export function recordMedication(
 }
 
 /**
+ * Record a clinical injury or physical trauma entry.
+ */
+export function recordInjury(
+  doc: CrdtPatientDocument,
+  nodeId: string,
+  anatomicalLocation: string,
+  classification: string,
+  tourniquetApplied = false
+): { updatedDoc: CrdtPatientDocument; delta: CrdtDelta } {
+  const updatedClock = incrementClock(doc.vectorClock, nodeId);
+  const entry: InjuryEntry = {
+    id: `inj_${sha256(`${doc.patientId}:${nodeId}:${Date.now()}:${Math.random()}`).substring(0, 12)}`,
+    timestamp: Date.now(),
+    recordedByNode: nodeId,
+    anatomicalLocation,
+    classification,
+    tourniquetApplied
+  };
+
+  const updatedDoc: CrdtPatientDocument = {
+    ...doc,
+    vectorClock: updatedClock,
+    injuries: [...(doc.injuries || []), entry]
+  };
+
+  const delta: CrdtDelta = {
+    deltaId: `delta_${sha256(`${entry.id}:${Date.now()}`).substring(0, 12)}`,
+    patientId: doc.patientId,
+    operationId: doc.operationId,
+    originNode: nodeId,
+    vectorClock: updatedClock,
+    timestamp: Date.now(),
+    mutations: [{ injury: entry }]
+  };
+
+  return { updatedDoc, delta };
+}
+
+/**
+ * Record a freeform situational narrative or distress transmission note.
+ */
+export function recordNote(
+  doc: CrdtPatientDocument,
+  nodeId: string,
+  text: string
+): { updatedDoc: CrdtPatientDocument; delta: CrdtDelta } {
+  const updatedClock = incrementClock(doc.vectorClock, nodeId);
+  const entry = {
+    id: `note_${sha256(`${doc.patientId}:${nodeId}:${Date.now()}:${Math.random()}`).substring(0, 12)}`,
+    timestamp: Date.now(),
+    author: nodeId,
+    text
+  };
+
+  const updatedDoc: CrdtPatientDocument = {
+    ...doc,
+    vectorClock: updatedClock,
+    notes: [...(doc.notes || []), entry]
+  };
+
+  const delta: CrdtDelta = {
+    deltaId: `delta_${sha256(`${entry.id}:${Date.now()}`).substring(0, 12)}`,
+    patientId: doc.patientId,
+    operationId: doc.operationId,
+    originNode: nodeId,
+    vectorClock: updatedClock,
+    timestamp: Date.now(),
+    mutations: [{ note: entry }]
+  };
+
+  return { updatedDoc, delta };
+}
+
+/**
  * Apply a remote CRDT delta to a local patient document (Idempotent).
  */
 export function applyDelta(doc: CrdtPatientDocument, delta: CrdtDelta): CrdtPatientDocument {
@@ -245,6 +319,14 @@ export function applyDelta(doc: CrdtPatientDocument, delta: CrdtDelta): CrdtPati
   const existingMedIds = new Set(doc.medications.map(m => m.id));
   const newMedications = [...doc.medications];
 
+  // De-duplicate injuries entries by ID
+  const existingInjuryIds = new Set((doc.injuries || []).map(i => i.id));
+  const newInjuries = [...(doc.injuries || [])];
+
+  // De-duplicate notes entries by ID
+  const existingNoteIds = new Set((doc.notes || []).map(n => n.id));
+  const newNotes = [...(doc.notes || [])];
+
   // De-duplicate allergies
   const allergiesSet = new Set(doc.knownAllergies);
 
@@ -261,6 +343,14 @@ export function applyDelta(doc: CrdtPatientDocument, delta: CrdtDelta): CrdtPati
       newMedications.push(mut.medication);
       existingMedIds.add(mut.medication.id);
     }
+    if (mut.injury && !existingInjuryIds.has(mut.injury.id)) {
+      newInjuries.push(mut.injury);
+      existingInjuryIds.add(mut.injury.id);
+    }
+    if (mut.note && !existingNoteIds.has(mut.note.id)) {
+      newNotes.push(mut.note);
+      existingNoteIds.add(mut.note.id);
+    }
     if (mut.allergy) {
       allergiesSet.add(mut.allergy);
     }
@@ -270,6 +360,8 @@ export function applyDelta(doc: CrdtPatientDocument, delta: CrdtDelta): CrdtPati
   newTriage.sort((a, b) => a.timestamp - b.timestamp);
   newVitals.sort((a, b) => a.timestamp - b.timestamp);
   newMedications.sort((a, b) => a.timestamp - b.timestamp);
+  newInjuries.sort((a, b) => a.timestamp - b.timestamp);
+  newNotes.sort((a, b) => a.timestamp - b.timestamp);
 
   return {
     ...doc,
@@ -277,6 +369,8 @@ export function applyDelta(doc: CrdtPatientDocument, delta: CrdtDelta): CrdtPati
     triageEvaluations: newTriage,
     vitals: newVitals,
     medications: newMedications,
+    injuries: newInjuries,
+    notes: newNotes,
     knownAllergies: Array.from(allergiesSet)
   };
 }
@@ -309,6 +403,18 @@ export function mergePatientDocuments(docA: CrdtPatientDocument, docB: CrdtPatie
   docB.medications.forEach(m => medsMap.set(m.id, m));
   const mergedMeds = Array.from(medsMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
+  // Union injuries
+  const injuriesMap = new Map<string, InjuryEntry>();
+  (docA.injuries || []).forEach(i => injuriesMap.set(i.id, i));
+  (docB.injuries || []).forEach(i => injuriesMap.set(i.id, i));
+  const mergedInjuries = Array.from(injuriesMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+  // Union notes
+  const notesMap = new Map<string, { id: string; timestamp: number; author: string; text: string }>();
+  (docA.notes || []).forEach(n => notesMap.set(n.id, n));
+  (docB.notes || []).forEach(n => notesMap.set(n.id, n));
+  const mergedNotes = Array.from(notesMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+
   // Union allergies
   const mergedAllergies = Array.from(new Set([...docA.knownAllergies, ...docB.knownAllergies]));
 
@@ -323,6 +429,8 @@ export function mergePatientDocuments(docA: CrdtPatientDocument, docB: CrdtPatie
     triageEvaluations: mergedTriage,
     vitals: mergedVitals,
     medications: mergedMeds,
+    injuries: mergedInjuries,
+    notes: mergedNotes,
     knownAllergies: mergedAllergies,
     divergenceFlags: Array.from(flagsMap.values())
   };

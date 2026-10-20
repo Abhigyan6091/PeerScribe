@@ -143,7 +143,8 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
   ];
   const alteredPhrases = [
     'confused', 'disoriented', 'altered', 'cannot follow commands', 'unable to follow commands',
-    'slurred speech', 'incoherent', 'not following commands', 'cant follow commands'
+    'slurred speech', 'incoherent', 'not following commands', 'cant follow commands',
+    'cant figure out', 'cannot figure out', 'dont know where', 'lost', 'where am i', 'in shock'
   ];
   const normalPhrases = [
     'follows simple commands', 'follows commands', 'alert', 'oriented', 'conscious', 'normal mental status'
@@ -157,7 +158,7 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
     mentalStatus = 'NORMAL';
   }
 
-  // 6. Common Injury Detections
+  // 6. Common Injury, Orthopedic & Situational Distress Detections
   const injuries: string[] = [];
   const injuryPatterns = [
     /open (?:femur|tibia|arm|leg|bone) fracture/gi,
@@ -172,7 +173,15 @@ export function extractStructuredObservation(rawTranscript: string): StructuredC
     /amputation/gi,
     /gunshot(?: wound)?/gi,
     /shrapnel(?: wound)?/gi,
-    /penetrating (?:chest|abdominal) trauma/gi
+    /penetrating (?:chest|abdominal) trauma/gi,
+    /broken (?:leg|arm|hip|ankle|bone|ribs?|femur|tibia)/gi,
+    /(?:leg|arm|hip|ankle|bone|femur|tibia) (?:is )?broken/gi,
+    /fractured? (?:leg|arm|hip|ankle|bone|femur|tibia|pelvis)/gi,
+    /trapped(?: under rubble| in building| in debris| in vehicle| in elevator| in basement)?/gi,
+    /pinned(?: down| under debris| under rubble)?/gi,
+    /stuck under (?:rubble|debris|concrete|wall|tree)/gi,
+    /smoke inhalation/gi,
+    /hypothermia/gi
   ];
   for (const pattern of injuryPatterns) {
     const matches = text.match(pattern);

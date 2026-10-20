@@ -55,12 +55,29 @@ async function loadBackendPatients() {
     const res = await fetch(`${API_BASE}/api/v1/patients`);
     if (res.ok) {
       const remotePatients = await res.json();
-      casualties = remotePatients.map(p => ({
-        id: p.doc.ephemeralId,
-        patientId: p.doc.patientId,
-        triage: p.activeTriage,
-        meta: `Observed ${p.doc.vitals?.length || 0} vitals | Updated ${new Date(p.doc.createdAt).toLocaleTimeString()}`
-      }));
+      casualties = remotePatients.map(p => {
+        const injText = p.doc.injuries && p.doc.injuries.length > 0 
+          ? p.doc.injuries.map(i => i.classification).join(', ')
+          : null;
+        const latestNote = p.doc.notes && p.doc.notes.length > 0
+          ? p.doc.notes[p.doc.notes.length - 1].text
+          : null;
+
+        let meta = `Observed ${p.doc.vitals?.length || 0} vitals`;
+        if (injText) {
+          meta = `🚨 ${injText} | ${meta}`;
+        } else if (latestNote) {
+          meta = `${latestNote.substring(0, 45)}... | ${meta}`;
+        }
+        meta += ` | ${new Date(p.doc.createdAt).toLocaleTimeString()}`;
+
+        return {
+          id: p.doc.ephemeralId,
+          patientId: p.doc.patientId,
+          triage: p.activeTriage,
+          meta
+        };
+      });
       renderCasualties();
     }
   } catch (err) {

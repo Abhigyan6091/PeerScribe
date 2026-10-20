@@ -6,6 +6,8 @@ import {
   recordTriageEvaluation,
   recordVitals,
   recordMedication,
+  recordInjury,
+  recordNote,
   getActiveTriageCategory,
   analyzeSemanticSafety,
   applyDivergenceAnalysis,
@@ -384,6 +386,43 @@ export class PeerScribeDaemon extends EventEmitter {
     return updatedDoc;
   }
 
+  recordInjury(
+    patientId: string,
+    location: string,
+    classification: string
+  ): CrdtPatientDocument {
+    let doc = this.db.getPatientDocument(patientId);
+    if (!doc) throw new Error(`Patient ${patientId} not found`);
+
+    const { updatedDoc, delta } = recordInjury(doc, this.nodeId, location, classification);
+    const activeTriage = getActiveTriageCategory(updatedDoc);
+    this.db.savePatientDocument(updatedDoc, activeTriage);
+    this.db.logAuditEvent(this.generateAuditId(), patientId, 'INJURY_RECORDED', this.nodeId, { location, classification });
+
+    this.packageAndPropagateDelta(delta, patientId, updatedDoc.ephemeralId, BundlePriority.CLINICAL_DELTA, 'CLINICAL_DELTA');
+    this.emit('patientUpdated', { doc: updatedDoc, activeTriage });
+    return updatedDoc;
+  }
+
+  recordNote(
+    patientId: string,
+    text: string
+  ): CrdtPatientDocument {
+    let doc = this.db.getPatientDocument(patientId);
+    if (!doc) throw new Error(`Patient ${patientId} not found`);
+
+    const { updatedDoc, delta } = recordNote(doc, this.nodeId, text);
+    const activeTriage = getActiveTriageCategory(updatedDoc);
+    this.db.savePatientDocument(updatedDoc, activeTriage);
+    this.db.logAuditEvent(this.generateAuditId(), patientId, 'NOTE_RECORDED', this.nodeId, { text });
+
+    const priority = activeTriage === 'RED' ? BundlePriority.CRITICAL_SOS : BundlePriority.CLINICAL_DELTA;
+    const priorityName = activeTriage === 'RED' ? 'CRITICAL_SOS' : 'CLINICAL_DELTA';
+    this.packageAndPropagateDelta(delta, patientId, updatedDoc.ephemeralId, priority, priorityName);
+    this.emit('patientUpdated', { doc: updatedDoc, activeTriage });
+    return updatedDoc;
+  }
+
   processVoiceTranscript(transcript: string, patientId?: string): any {
     const aiResult = extractAndEvaluateTriage(transcript);
     
@@ -394,6 +433,7 @@ export class PeerScribeDaemon extends EventEmitter {
       targetDoc = this.createPatient();
     }
 
+    // 1. Record vitals if mentioned
     if (aiResult.observation.respirationRate || aiResult.observation.radialPulsePresent !== undefined) {
       this.recordVitals(targetDoc.patientId, {
         respirationRate: aiResult.observation.respirationRate,
@@ -401,17 +441,31 @@ export class PeerScribeDaemon extends EventEmitter {
       });
     }
 
+    // 2. Record extracted injuries if mentioned (e.g. broken leg, compound fracture, trapped)
+    if (aiResult.observation.injuries && aiResult.observation.injuries.length > 0) {
+      for (const inj of aiResult.observation.injuries) {
+        this.recordInjury(targetDoc.patientId, 'General Trauma', inj);
+      }
+    }
+
+    // 3. Always attach raw situational voice transcript as a clinical distress note
+    this.recordNote(targetDoc.patientId, `[VOICE DISTRESS TRANSMISSION] "${transcript}"`);
+
+    // 4. Record START Triage outcome
     const triageOutcome = this.recordTriage(
       targetDoc.patientId,
       aiResult.triageResult.category,
       aiResult.triageResult.protocolApplied,
-      'Extracted via Edge AI speech input'
+      aiResult.observation.injuries.length > 0
+        ? `Edge AI parsed: ${aiResult.observation.injuries.join(', ')}`
+        : 'Extracted via Edge AI speech input'
     );
 
     console.log(`\x1b[36m[EDGE AI SPEECH]\x1b[0m Parsed: "${transcript}" -> START Triage: \x1b[1m${aiResult.triageResult.category}\x1b[0m`);
     this.logActivity('AI', `Voice Extracted -> Triage: ${aiResult.triageResult.category}`, {
       transcript,
-      vitals: aiResult.observation
+      vitals: aiResult.observation,
+      injuries: aiResult.observation.injuries
     });
 
     return {

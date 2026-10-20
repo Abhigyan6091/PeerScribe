@@ -69,6 +69,30 @@ test('Backend Service Daemon: Speech Transcript to START Triage Pipeline', () =>
   assert.strictEqual(loaded!.triageEvaluations.length, 1);
 });
 
+test('Backend Service Daemon: Voice Distress Relay with Broken Leg, Entrapment & Situational Notes', () => {
+  const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
+  const distressMsg = "I have a broken leg and I'm trapped under rubble in basement B, cannot figure out where I am";
+
+  const res = daemon.processVoiceTranscript(distressMsg);
+  assert.ok(res.patientId);
+  assert.strictEqual(res.observation.canWalk, false);
+  assert.strictEqual(res.observation.mentalStatus, 'ALTERED');
+  assert.ok(res.observation.injuries.some((i: string) => i.includes('broken leg')));
+  assert.ok(res.observation.injuries.some((i: string) => i.includes('trapped')));
+  assert.strictEqual(res.triageResult.category, 'RED');
+
+  // Verify CRDT document persisted injuries and distress note
+  const loaded = daemon.db.getPatientDocument(res.patientId);
+  assert.ok(loaded);
+  assert.ok(loaded!.injuries.length >= 2);
+  assert.ok(loaded!.notes.length >= 1);
+  assert.ok(loaded!.notes[0].text.includes(distressMsg));
+
+  // Verify prioritized DTN outbox and wire packet propagation
+  assert.ok(daemon.recentWirePackets.length > 0);
+  assert.strictEqual(daemon.recentWirePackets[0].priority, 'CRITICAL_SOS');
+});
+
 test('Backend Service Daemon: HTTP Server API Endpoints', async () => {
   const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
   const server = createPeerScribeServer(daemon);
