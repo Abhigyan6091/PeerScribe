@@ -55,7 +55,7 @@
           "arch": ["x64"]
         }
       ],
-      "artifactName": "PeerScribe-Windows-${channel}-${version}-${arch}.${ext}"
+      "artifactName": "PeerScribe-Windows-v${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

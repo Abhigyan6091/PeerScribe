@@ -86,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --project apps/desktop-electron --win nsis portable zip --publish never
+          npx electron-builder --project apps/desktop-electron --win --publish never
 
       - name: Stage Windows Release Binaries
         shell: bash
