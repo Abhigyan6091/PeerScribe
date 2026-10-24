@@ -80,7 +80,10 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm install
+
+      - name: Install Electron Packaging Toolchain
+        run: npm install -D electron-builder@25.1.8 app-builder-bin
 
       - name: Package Windows Electron Application
         env:
