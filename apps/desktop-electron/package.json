@@ -15,12 +15,14 @@
   "dependencies": {},
   "devDependencies": {
     "electron": "33.2.1",
-    "electron-builder": "25.1.8"
+    "electron-builder": "^26.0.0"
   },
   "build": {
     "appId": "org.peerscribe.desktop",
     "productName": "PeerScribe Tactical Desktop",
     "electronVersion": "33.2.1",
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
     "copyright": "Copyright © 2026 PeerScribe Open Source Initiative",
     "publish": [
       {
