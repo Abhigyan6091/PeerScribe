@@ -1,0 +1,144 @@
+[
+  {
+    "schema_version": 1,
+    "event_id": "evt_pat_001_creation",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "PATIENT_CREATED",
+    "actor_id": "node_desktop_alpha",
+    "actor_sequence": 1,
+    "lamport_timestamp": 1,
+    "causal_context": { "node_desktop_alpha": 1 },
+    "occurred_at_utc": "2026-10-24T15:00:00.000Z",
+    "payload": {
+      "ephemeral_id": "RED-FALCON-04",
+      "sector_geohash": "u15ek200"
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_vit_002_tachycardia",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "VITALS_RECORDED",
+    "actor_id": "node_desktop_alpha",
+    "actor_sequence": 2,
+    "lamport_timestamp": 2,
+    "causal_context": { "node_desktop_alpha": 2 },
+    "occurred_at_utc": "2026-10-24T15:01:00.000Z",
+    "payload": {
+      "respiration_rate": 34,
+      "radial_pulse_present": false,
+      "mental_status": "ALTERED",
+      "capillary_refill_seconds": 3.5,
+      "systolic_bp": 85
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_inj_003_open_fracture",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "INJURY_RECORDED",
+    "actor_id": "node_mobile_bravo",
+    "actor_sequence": 1,
+    "lamport_timestamp": 3,
+    "causal_context": { "node_desktop_alpha": 2, "node_mobile_bravo": 1 },
+    "occurred_at_utc": "2026-10-24T15:02:00.000Z",
+    "payload": {
+      "anatomical_location": "RIGHT_FEMUR",
+      "classification": "OPEN_FRACTURE",
+      "tourniquet_applied": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_tri_004_immediate_red",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "TRIAGE_STATUS_CHANGED",
+    "actor_id": "node_desktop_alpha",
+    "actor_sequence": 3,
+    "lamport_timestamp": 4,
+    "causal_context": { "node_desktop_alpha": 3, "node_mobile_bravo": 1 },
+    "occurred_at_utc": "2026-10-24T15:03:00.000Z",
+    "payload": {
+      "triage_category": "RED",
+      "protocol": "START_ADULT_v1.0",
+      "rationale": "Respiratory compromise: rate is 34/min with absent radial pulse"
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_med_005_morphine_admin",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "MEDICATION_RECORDED",
+    "actor_id": "node_desktop_alpha",
+    "actor_sequence": 4,
+    "lamport_timestamp": 5,
+    "causal_context": { "node_desktop_alpha": 4 },
+    "occurred_at_utc": "2026-10-24T15:04:00.000Z",
+    "payload": {
+      "drug_name": "Morphine Sulfate",
+      "dosage": "5mg",
+      "route": "IV",
+      "authorized_medic_signature": "sig_ed25519_994b281f"
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_vlt_006_snapshot_attached",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "VAULT_SNAPSHOT_ATTACHED",
+    "actor_id": "node_mobile_bravo",
+    "actor_sequence": 2,
+    "lamport_timestamp": 6,
+    "causal_context": { "node_desktop_alpha": 4, "node_mobile_bravo": 2 },
+    "occurred_at_utc": "2026-10-24T15:05:00.000Z",
+    "payload": {
+      "blood_group": "O+",
+      "allergies": [ "Penicillin", "Sulfa" ],
+      "critical_conditions": [ "Type 2 Diabetes", "Asthma" ],
+      "emergency_contacts": [
+        { "name": "Maya Sharma", "relation": "Spouse", "phone": "+977-9801234567" }
+      ]
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_div_007_divergence_flagged",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "DIVERGENCE_ACKNOWLEDGED",
+    "actor_id": "node_mobile_bravo",
+    "actor_sequence": 3,
+    "lamport_timestamp": 7,
+    "causal_context": { "node_desktop_alpha": 4, "node_mobile_bravo": 3 },
+    "occurred_at_utc": "2026-10-24T15:06:00.000Z",
+    "payload": {
+      "flag_id": "div_tri_delta_01",
+      "conflict_type": "DIV_TRIAGE_DELTA",
+      "severity": "CRITICAL",
+      "reason": "Medic B tagged GREEN concurrently while Medic A evaluated RED"
+    }
+  },
+  {
+    "schema_version": 1,
+    "event_id": "evt_res_008_divergence_resolved",
+    "operation_id": "OP_2026_KATHMANDU_QUAKE",
+    "entity_id": "pt_uuid_001",
+    "event_type": "DIVERGENCE_RESOLVED",
+    "actor_id": "node_desktop_alpha",
+    "actor_sequence": 5,
+    "lamport_timestamp": 8,
+    "causal_context": { "node_desktop_alpha": 5, "node_mobile_bravo": 3 },
+    "occurred_at_utc": "2026-10-24T15:07:00.000Z",
+    "payload": {
+      "flag_id": "div_tri_delta_01",
+      "resolved_category": "RED",
+      "clinician_signoff_note": "Lead Trauma Medic confirmed RED due to open femur fracture and shock"
+    }
+  }
+]

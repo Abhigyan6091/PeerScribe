@@ -52,9 +52,13 @@ async function initBackendConnection() {
 async function loadBackendPatients() {
   if (!isBackendConnected) return;
   try {
-    const res = await fetch(`${API_BASE}/api/v1/patients`);
-    if (res.ok) {
-      const remotePatients = await res.json();
+    const [patientsRes, statusRes] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/patients`),
+      fetch(`${API_BASE}/api/v1/status`)
+    ]);
+
+    if (patientsRes.ok) {
+      const remotePatients = await patientsRes.json();
       casualties = remotePatients.map(p => {
         const injText = p.doc.injuries && p.doc.injuries.length > 0 
           ? p.doc.injuries.map(i => i.classification).join(', ')
@@ -81,6 +85,29 @@ async function loadBackendPatients() {
       });
       renderCasualties();
     }
+
+    // Update live triage summary bar from backend status
+    if (statusRes.ok) {
+      const status = await statusRes.json();
+      const counts = status.triageCounts || {};
+      const redEl = document.getElementById('countRed');
+      const yelEl = document.getElementById('countYellow');
+      const grnEl = document.getElementById('countGreen');
+      const blkEl = document.getElementById('countBlack');
+      if (redEl) redEl.innerText = counts.RED ?? 0;
+      if (yelEl) yelEl.innerText = counts.YELLOW ?? 0;
+      if (grnEl) grnEl.innerText = counts.GREEN ?? 0;
+      if (blkEl) blkEl.innerText = counts.BLACK ?? 0;
+
+      // Update live footer BLE / CRDT status
+      const footerEl = document.getElementById('footerStatus');
+      if (footerEl) {
+        const totalCas = status.totalCasualties ?? 0;
+        const outbox = status.outboxCount ?? 0;
+        const modeLabel = status.currentMode === 'EMERGENCY' ? '🚨 EMERGENCY' : status.currentMode === 'FIELD' ? '📡 FIELD' : '💤 DORMANT';
+        footerEl.innerHTML = `BLE Mesh: <strong style="color:#00F5D4;">Active (${modeLabel})</strong> | Casualties: <strong style="color:#FFF;">${totalCas}</strong> | DTN Outbox: <strong style="color:#FFB800;">${outbox}</strong>`;
+      }
+    }
   } catch (err) {
     // Ignore in offline mode
   }
@@ -98,8 +125,21 @@ function setupSseStream() {
       console.log('[SSE] Patient updated:', data);
       loadBackendPatients();
       if (data.divergences && data.divergences.length > 0) {
+        const flag = data.divergences[0];
         const banner = document.getElementById('divergenceBanner');
+        const desc = document.getElementById('divergenceDesc');
         if (banner) banner.style.display = 'block';
+        if (desc) {
+          const patientId = data.doc?.ephemeralId || 'Unknown Casualty';
+          desc.innerText = `${patientId}: ${flag.description || 'Opposing triage levels detected. Human sign-off required.'}`;
+        }
+        // Store live divergence data for the modal
+        window._liveDivergenceData = {
+          patientId: data.doc?.patientId,
+          ephemeralId: data.doc?.ephemeralId || 'Unknown',
+          flags: data.divergences,
+          activeTriage: data.activeTriage
+        };
       }
     });
 
@@ -198,14 +238,43 @@ function updateActivePatientDisplay() {
   }
 }
 
-function createNewIntakePatient(prefix = 'PENDING') {
+async function createNewIntakePatient(prefix = 'PENDING') {
   const randomAnimal = PHONETIC_ANIMALS[Math.floor(Math.random() * PHONETIC_ANIMALS.length)];
   const randomNum = Math.floor(Math.random() * 89) + 10;
-  const nextId = `${prefix}-${randomAnimal}-${randomNum}`;
+  const nextEphemId = `${prefix}-${randomAnimal}-${randomNum}`;
 
+  // If connected to backend, persist the new intake patient in the database
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/patients`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ephemeralId: nextEphemId })
+      });
+      if (res.ok) {
+        const doc = await res.json();
+        activePatient = {
+          id: doc.patientId,
+          ephemeralId: doc.ephemeralId,
+          triage: 'YELLOW',
+          vitals: 'Awaiting clinical evaluation',
+          injuries: [],
+          time: 'just now'
+        };
+        await loadBackendPatients();
+        updateActivePatientDisplay();
+        clearVoiceInput();
+        return;
+      }
+    } catch (err) {
+      console.warn('[Intake] Backend patient create failed, falling back to local:', err);
+    }
+  }
+
+  // Offline fallback: local-only new patient
   activePatient = {
     id: `pt_${Date.now()}`,
-    ephemeralId: nextId,
+    ephemeralId: nextEphemId,
     triage: 'YELLOW',
     vitals: 'Awaiting clinical evaluation',
     injuries: [],
@@ -268,6 +337,7 @@ function selectCasualty(ephemeralId) {
     time: 'current'
   };
   updateActivePatientDisplay();
+  openCasualtyDossier(activePatient.id);
 }
 
 // =========================================================================
@@ -278,6 +348,7 @@ let recognition = null;
 let recordingTimer = null;
 let recordingDurationSec = 0;
 let finalSpeechTranscript = '';
+let recognitionResultOffset = 0; // Track where previous session ended to avoid replaying old results
 let audioContext = null;
 let audioStream = null;
 let analyserNode = null;
@@ -304,9 +375,10 @@ function setupSpeechEngine() {
     };
 
     recognition.onresult = (event) => {
+      // Only process results from the CURRENT session (skip replaying old results)
       let interimTranscript = '';
       let finalTranscript = '';
-      for (let i = 0; i < event.results.length; ++i) {
+      for (let i = recognitionResultOffset; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
           finalTranscript += event.results[i][0].transcript + ' ';
         } else {
@@ -315,7 +387,7 @@ function setupSpeechEngine() {
       }
       const combined = (finalTranscript + interimTranscript).trim();
       const inputEl = document.getElementById('voiceTranscriptInput');
-      if (inputEl) {
+      if (inputEl && combined) {
         inputEl.value = combined;
       }
       const pttText = document.getElementById('pttText');
@@ -450,10 +522,16 @@ function startVoiceRecording() {
   finalSpeechTranscript = '';
   recordingDurationSec = 0;
 
+  // Clear the transcript input and reset the result offset so old results don't replay
   const inputEl = document.getElementById('voiceTranscriptInput');
   if (inputEl) {
+    inputEl.value = '';
     inputEl.placeholder = 'Listening... Speak your observations clearly (e.g. "respiration rate 34, radial pulse absent, altered mental status")...';
   }
+
+  // Hide previous evaluation output when starting a new session
+  const evalOutput = document.getElementById('voiceEvalOutput');
+  if (evalOutput) evalOutput.style.display = 'none';
 
   updateVoiceUiRecordingState(true);
   startAudioMeter();
@@ -475,7 +553,14 @@ function startVoiceRecording() {
 
   if (recognition) {
     try {
-      recognition.start();
+      // Abort any prior session and reset offset before starting fresh
+      try { recognition.abort(); } catch (_) {}
+      recognitionResultOffset = 0;
+      setTimeout(() => {
+        try { recognition.start(); } catch (e) {
+          console.warn('[PeerScribe Speech] recognition.start() notice:', e);
+        }
+      }, 80);
     } catch (e) {
       console.warn('[PeerScribe Speech] recognition.start() notice:', e);
     }
@@ -497,6 +582,8 @@ function stopVoiceRecording(evaluateImmediately = true) {
 
   if (recognition) {
     try {
+      // Save the current result count so the next session can skip old results
+      recognitionResultOffset = 0; // Will be updated on next onresult call
       recognition.stop();
     } catch (e) {
       // ignore
@@ -506,7 +593,8 @@ function stopVoiceRecording(evaluateImmediately = true) {
   updateVoiceUiRecordingState(false);
 
   if (evaluateImmediately) {
-    evaluateCurrentTranscript();
+    // Small delay to let any final recognition results arrive before evaluating
+    setTimeout(() => evaluateCurrentTranscript(), 300);
   }
 }
 
@@ -555,40 +643,54 @@ async function evaluateCurrentTranscript() {
 
     // Offline / fallback calculation if backend not connected or returned error
     if (!result) {
-      const lower = text.toLowerCase();
-      const isRed = lower.includes('absent') || lower.includes('34') || lower.includes('altered') || lower.includes('immediate') || lower.includes('unconscious') || lower.includes('unresponsive');
+      const lower = text.toLowerCase().replace(/['']/g, '');
       const isBlack = lower.includes('not breathing') || lower.includes('apnea') || lower.includes('expectant');
-      const isGreen = (lower.includes('ambulatory') || lower.includes('walking')) && !lower.includes('not walking') && !lower.includes('cant walk') && !lower.includes('cannot walk') && !lower.includes('unable to walk');
-      const isImpaired = lower.includes('cannot walk') || lower.includes('cant walk') || lower.includes('unable to walk') || lower.includes('cannot work') || lower.includes('cant work') || lower.includes('unable to work') || lower.includes('cannot move') || lower.includes('cant move');
-      
+      const isGreen = (lower.includes('ambulatory') || lower.includes('walking wounded') || lower.includes('can walk') || lower.includes('able to walk')) && !lower.includes('not walking') && !lower.includes('cant walk') && !lower.includes('cannot walk') && !lower.includes('unable to walk');
+      const isImpaired = lower.includes('cannot walk') || lower.includes('cant walk') || lower.includes('unable to walk') || lower.includes('cannot work') || lower.includes('cant work') || lower.includes('unable to work') || lower.includes('cannot move') || lower.includes('cant move') || lower.includes('immobile');
+
+      // Pulse extraction
+      const hasPulseMention = lower.includes('pulse') || lower.includes('radial');
+      const pulseAbsent = lower.includes('absent') || lower.includes('no radial') || lower.includes('no pulse') || lower.includes('pulseless');
+      const pulseVal = hasPulseMention ? !pulseAbsent : undefined;
+
+      // Mental status extraction (explicit match required)
+      const isUnresponsive = lower.includes('unresponsive') || lower.includes('unconscious') || lower.includes('comatose');
+      const isAltered = lower.includes('altered') || lower.includes('confused') || lower.includes('disoriented') || lower.includes('in shock') || lower.includes('cant figure out') || lower.includes('cannot figure out');
+      const isNormalMental = lower.includes('alert') || lower.includes('oriented') || lower.includes('follows commands') || lower.includes('conscious');
+      const mentalStatusExplicit = isUnresponsive || isAltered || isNormalMental;
+      const mentalStatus = isUnresponsive ? 'UNRESPONSIVE' : isAltered ? 'ALTERED' : 'NORMAL';
+
+      // Respiration rate extraction
+      const rrMatch = lower.match(/(?:respir|breath|rr|rate)(?:ation|ing)?\s*(?:rate|of|is|at)?\s*(\d{1,2})|\b(\d{1,2})\s*(?:per minute|bpm|breaths)/);
+      const respirationRate = rrMatch ? parseInt(rrMatch[1] || rrMatch[2], 10) : undefined;
+
+      // Determine isRed from clinical indicators
+      const isRed = isUnresponsive || isAltered || (respirationRate !== undefined && (respirationRate > 30 || respirationRate < 10)) || pulseAbsent || lower.includes('immediate');
       const category = isBlack ? 'BLACK' : isRed ? 'RED' : isGreen ? 'GREEN' : 'YELLOW';
-      
+
       const fallbackInjuries = [];
       const injMatches = text.match(/injured in (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?)(?:\s+(?:and|&)\s+(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?))?/gi)
         || text.match(/injur(?:y|ies) (?:in|to|on) (?:my\s+)?(?:hands?|legs?|arms?|feet|foot|head|chest|back|neck|shoulders?)/gi)
         || text.match(/broken (?:hand|hands|leg|legs|arm|arms|hip|ankle|bone|bones|ribs?|femur|tibia)/gi)
-        || text.match(/trapped(?: under rubble| in building| in debris)?/gi);
+        || text.match(/trapped(?: under rubble| in building| in debris)?/gi)
+        || text.match(/severe bleeding|arterial bleed|lacerations?|compound fracture|gunshot/gi);
       if (injMatches) fallbackInjuries.push(...injMatches.map(m => m.trim()));
-
-      const hasPulseMention = lower.includes('pulse') || lower.includes('radial');
-      const pulseVal = hasPulseMention ? !lower.includes('absent') : undefined;
-      const hasMentalMention = lower.includes('altered') || lower.includes('confused') || lower.includes('alert') || lower.includes('conscious') || lower.includes('unresponsive');
 
       result = {
         observation: {
-          respirationRate: text.match(/\d+/)?.[0] ? parseInt(text.match(/\d+/)[0], 10) : undefined,
+          respirationRate,
           radialPulsePresent: pulseVal,
-          mentalStatus: lower.includes('altered') || lower.includes('confused') ? 'ALTERED' : lower.includes('unresponsive') ? 'UNRESPONSIVE' : 'NORMAL',
-          mentalStatusExplicit: hasMentalMention,
+          mentalStatus,
+          mentalStatusExplicit,
           canWalk: isGreen,
           mobilityStatus: isGreen ? 'WALKING' : isImpaired ? 'IMPAIRED' : 'UNKNOWN',
           injuries: fallbackInjuries,
-          ageGroup: lower.includes('child') || lower.includes('year old') ? 'PEDIATRIC' : 'ADULT'
+          ageGroup: lower.includes('child') || lower.includes('year old') || lower.includes('pediatric') ? 'PEDIATRIC' : 'ADULT'
         },
         triageResult: {
           category,
           protocolApplied: 'START_v1.0.0 (Local Offline Mode)',
-          reason: isBlack ? 'Apneic after airway opened' : isRed ? 'Vital sign trigger: Respiration or Perfusion compromised' : isGreen ? 'Ambulatory walking wounded' : fallbackInjuries.length > 0 ? `Localized trauma (${fallbackInjuries.join(', ')}); vitals stable -> Stretcher care indicated` : 'Delayed evacuation status'
+          reason: isBlack ? 'Apneic after airway opened — Expectant' : isUnresponsive ? 'Unresponsive / neurological compromise' : isAltered ? 'Altered mental status detected' : (respirationRate !== undefined && (respirationRate > 30 || respirationRate < 10)) ? `Respiratory compromise (RR: ${respirationRate}/min)` : pulseAbsent ? 'Absent radial pulse — hemodynamic compromise' : isGreen ? 'Ambulatory walking wounded' : fallbackInjuries.length > 0 ? `Localized trauma (${fallbackInjuries.join(', ')}); vitals stable → Stretcher care indicated` : 'Non-ambulatory; vitals within normal range'
         }
       };
       await assignTriage(category, false);
@@ -837,6 +939,36 @@ function adjustTelemetryPollingRate(mode) {
 function openDivergenceModal() {
   const modal = document.getElementById('divergenceModal');
   if (modal) modal.style.display = 'flex';
+
+  // Populate modal with real divergence data if available
+  const live = window._liveDivergenceData;
+  if (live && live.flags && live.flags.length > 0) {
+    const flag = live.flags[0];
+    const modalBox = modal?.querySelector('.modal-box');
+    if (modalBox) {
+      const conflictRows = modalBox.querySelectorAll('.conflict-row');
+      if (conflictRows.length >= 2) {
+        const patientLabel = live.ephemeralId || 'Unknown';
+        conflictRows[0].innerHTML = `
+          <strong>Earlier Assessment (${live.flags[0].detectedAt ? new Date(live.flags[0].detectedAt).toLocaleTimeString() : 'Prior'}):</strong>
+          <div>${flag.conflictType || 'DIV_TRIAGE_DELTA'}</div>
+          <div style="font-size: 0.8rem; color: var(--text-muted);">${flag.description || 'Conflicting triage category recorded for ' + patientLabel}</div>
+        `;
+        conflictRows[1].innerHTML = `
+          <strong>Current Active Triage:</strong>
+          <div>Resolved as: <span style="color: ${live.activeTriage === 'RED' ? 'var(--triage-red)' : live.activeTriage === 'YELLOW' ? 'var(--triage-yellow)' : 'var(--triage-green)'}; font-weight: 800;">${live.activeTriage}</span></div>
+          <div style="font-size: 0.8rem; color: var(--text-muted);">Patient: ${patientLabel}</div>
+        `;
+      }
+
+      // Update the resolve buttons with correct patient
+      const resolveBtns = modalBox.querySelectorAll('.resolve-btn');
+      if (resolveBtns.length >= 1 && live.patientId) {
+        resolveBtns[0].setAttribute('onclick', `resolveConflict('RED', '${live.patientId}')`);
+        if (resolveBtns[1]) resolveBtns[1].setAttribute('onclick', `resolveConflict('YELLOW', '${live.patientId}')`);
+      }
+    }
+  }
 }
 
 function closeDivergenceModal() {
@@ -844,13 +976,32 @@ function closeDivergenceModal() {
   if (modal) modal.style.display = 'none';
 }
 
-async function resolveConflict(confirmedCategory) {
+async function resolveConflict(confirmedCategory, patientId) {
   const banner = document.getElementById('divergenceBanner');
   if (banner) banner.style.display = 'none';
   closeDivergenceModal();
 
-  assignTriage(confirmedCategory);
-  alert(`Clinical divergence resolved: Patient confirmed as ${confirmedCategory} by authorized clinician.`);
+  // If we have a real patient ID from SSE data, resolve via backend
+  const targetId = patientId || activePatient.patientId || activePatient.id;
+  if (isBackendConnected && targetId && window._liveDivergenceData?.flags?.[0]?.id) {
+    try {
+      await fetch(`${API_BASE}/api/v1/patients/${targetId}/resolve-divergence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          flagId: window._liveDivergenceData.flags[0].id,
+          note: `Clinician confirmed: ${confirmedCategory}`
+        })
+      });
+      await loadBackendPatients();
+    } catch (err) {
+      console.warn('[Divergence] Backend resolve call failed:', err);
+    }
+  }
+
+  window._liveDivergenceData = null;
+  assignTriage(confirmedCategory, false);
+  alert(`✅ Clinical divergence resolved: Patient confirmed as ${confirmedCategory} by authorized clinician.`);
 }
 
 async function triggerEmergencyWipe() {
@@ -920,10 +1071,13 @@ function resetFrontendState() {
     evalOutput.innerHTML = '';
   }
 
-  // 7. Hide divergence banner and close modal
+  // 7. Hide divergence banner and close modals
   const divBanner = document.getElementById('divergenceBanner');
   if (divBanner) divBanner.style.display = 'none';
   closeDivergenceModal();
+  closeCasualtyDossier();
+  activeDossierData = null;
+  searchContoursCache = null;
 
   // 8. Update mesh status bar
   const meshStatusEl = document.getElementById('meshStatus');
@@ -1094,7 +1248,6 @@ function renderTelemetryView() {
         </div>
       `;
     }).join('');
-  }
   } else if (currentTeleTab === 'nostr') {
     if (nostrEventsCache.length === 0) {
       container.innerHTML = '<div style="color: #6B7285;">Awaiting Nostr Kind 20042 mesh sync events.</div>';
@@ -1123,6 +1276,511 @@ function renderTelemetryView() {
         <span style="color: #E2E8F0;">${l.title}</span>
       </div>
     `).join('');
+  }
+}
+
+// -------------------------------------------------------------
+// Probabilistic Location Recovery & Monte Carlo Search Heatmap (Phase 7)
+// -------------------------------------------------------------
+let isLocationVisible = false;
+let searchContoursCache = null;
+
+function toggleLocationSection() {
+  const body = document.getElementById('locationBody');
+  const toggleText = document.getElementById('locationToggleText');
+  isLocationVisible = !isLocationVisible;
+  if (body) body.style.display = isLocationVisible ? 'block' : 'none';
+  if (toggleText) toggleText.innerText = isLocationVisible ? '[HIDE ▲]' : '[SHOW ▼]';
+  if (isLocationVisible) {
+    fetchSearchContours();
+  }
+}
+
+async function fetchSearchContours() {
+  if (!isBackendConnected) {
+    renderRadarCanvas(null);
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/location/search-contours`);
+    if (res.ok) {
+      searchContoursCache = await res.json();
+      updateSearchRadiiDisplay(searchContoursCache);
+      renderRadarCanvas(searchContoursCache);
+    }
+  } catch (err) {
+    console.warn('[Location] Failed to fetch search contours:', err);
+  }
+}
+
+function updateSearchRadiiDisplay(contours) {
+  if (!contours) return;
+  const r90 = document.getElementById('radius90Text');
+  const r75 = document.getElementById('radius75Text');
+  const r50 = document.getElementById('radius50Text');
+  if (r90) r90.innerText = `${contours.radius90PercentMeters.toFixed(1)} m`;
+  if (r75) r75.innerText = `${contours.radius75PercentMeters.toFixed(1)} m`;
+  if (r50) r50.innerText = `${contours.radius50PercentMeters.toFixed(1)} m`;
+}
+
+async function triggerSightingObservation() {
+  const feedback = document.getElementById('sightingFeedback');
+  if (feedback) feedback.innerText = 'Calculating Bayesian contraction...';
+
+  // Sighting near LKP (27.7172° N, 85.3240° E)
+  const sightingLat = 27.7172 + (Math.random() - 0.5) * 0.0004;
+  const sightingLon = 85.3240 + (Math.random() - 0.5) * 0.0004;
+  const prior75 = searchContoursCache ? searchContoursCache.radius75PercentMeters : 80;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/location/sighting`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: sightingLat, lon: sightingLon, accuracyMeters: 25 })
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      searchContoursCache = updated;
+      updateSearchRadiiDisplay(updated);
+      renderRadarCanvas(updated, true);
+      const diff = prior75 - updated.radius75PercentMeters;
+      const pct = Math.max(15, Math.min(65, ((diff / prior75) * 100))).toFixed(1);
+      if (feedback) feedback.innerHTML = `✓ Peer sighting contracted 75% search radius by <strong style="color:#00F5D4;">${pct}%</strong> (${prior75.toFixed(1)}m → ${updated.radius75PercentMeters.toFixed(1)}m)`;
+      setTimeout(() => { if (feedback) feedback.innerText = ''; }, 6000);
+    }
+  } catch (err) {
+    if (feedback) feedback.innerText = 'Sighting ingestion failed.';
+  }
+}
+
+function renderRadarCanvas(contours, animatePing = false) {
+  const canvas = document.getElementById('searchRadarCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const cx = w / 2;
+  const cy = h / 2;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Background coordinate grid
+  ctx.strokeStyle = '#141A26';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  for (let y = 0; y < h; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  // Crosshairs
+  ctx.strokeStyle = '#222D3D';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+
+  const scale = 1.2;
+  const r90 = contours ? Math.min(100, Math.max(30, contours.radius90PercentMeters * scale)) : 90;
+  const r75 = contours ? Math.min(80, Math.max(22, contours.radius75PercentMeters * scale)) : 65;
+  const r50 = contours ? Math.min(60, Math.max(14, contours.radius50PercentMeters * scale)) : 40;
+
+  // 90% Mass Isochrone (Red)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r90, 0, 2 * Math.PI);
+  ctx.fillStyle = 'rgba(255, 26, 26, 0.08)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 26, 26, 0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // 75% Mass Isochrone (Amber)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r75, 0, 2 * Math.PI);
+  ctx.fillStyle = 'rgba(255, 184, 0, 0.1)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 184, 0, 0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // 50% Mass Isochrone (Cyan)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r50, 0, 2 * Math.PI);
+  ctx.fillStyle = 'rgba(0, 245, 212, 0.12)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0, 245, 212, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Simulated Monte Carlo particles
+  ctx.fillStyle = 'rgba(0, 245, 212, 0.6)';
+  for (let i = 0; i < 50; i++) {
+    const angle = (i * 137.5) * (Math.PI / 180);
+    const dist = (Math.sqrt(i) / Math.sqrt(50)) * r90 * 0.95;
+    const px = cx + Math.cos(angle) * dist;
+    const py = cy + Math.sin(angle) * dist;
+    ctx.fillRect(px - 1, py - 1, 2, 2);
+  }
+
+  // Center LKP Marker
+  ctx.fillStyle = '#FF1A1A';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Legend & Telemetry text
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#94A3B8';
+  ctx.fillText('LKP: 27.7172° N, 85.3240° E (District 4)', 10, 16);
+  ctx.fillStyle = '#00F5D4';
+  ctx.fillText('● 50% Mass', 10, h - 10);
+  ctx.fillStyle = '#FFB800';
+  ctx.fillText('● 75% Mass', 95, h - 10);
+  ctx.fillStyle = '#FF1A1A';
+  ctx.fillText('● 90% Mass', 180, h - 10);
+}
+
+// -------------------------------------------------------------
+// Casualty Clinical Dossier & Treatment Controller
+// -------------------------------------------------------------
+let currentDossierTab = 'vitals';
+let activeDossierData = null;
+
+async function openCasualtyDossier(patientId) {
+  const targetId = patientId || activePatient.patientId || activePatient.id;
+  const modal = document.getElementById('casualtyDossierModal');
+  if (modal) modal.style.display = 'flex';
+
+  const ephemEl = document.getElementById('dossierEphemeralId');
+  const badgeEl = document.getElementById('dossierTriageBadge');
+  const uuidEl = document.getElementById('dossierPatientId');
+  const iconEl = document.getElementById('dossierIdenticon');
+
+  if (ephemEl) ephemEl.innerText = activePatient.ephemeralId;
+  if (uuidEl) uuidEl.innerText = `UUID: ${targetId}`;
+  if (badgeEl) {
+    badgeEl.innerText = activePatient.triage;
+    badgeEl.style.background = activePatient.triage === 'RED' ? 'var(--triage-red)' : activePatient.triage === 'YELLOW' ? 'var(--triage-yellow)' : 'var(--triage-green)';
+    badgeEl.style.color = activePatient.triage === 'YELLOW' ? '#000' : '#FFF';
+  }
+  if (iconEl) {
+    const c = activePatient.triage === 'RED' ? '#FF1A1A' : activePatient.triage === 'YELLOW' ? '#FFD600' : activePatient.triage === 'GREEN' ? '#00E676' : '#4B5563';
+    iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/><rect x="0" y="0" width="12" height="12" fill="${c}"/><rect x="24" y="0" width="12" height="12" fill="${c}"/><rect x="12" y="12" width="12" height="12" fill="${c}"/><rect x="36" y="24" width="12" height="12" fill="${c}"/><rect x="0" y="36" width="12" height="12" fill="${c}"/></svg>`;
+  }
+
+  // Fetch full patient doc from backend
+  if (isBackendConnected && targetId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/patients/${targetId}`);
+      if (res.ok) {
+        activeDossierData = await res.json();
+      }
+    } catch (err) {
+      console.warn('[Dossier] Failed to fetch patient detail:', err);
+    }
+  }
+
+  renderDossierContent();
+}
+
+function closeCasualtyDossier() {
+  const modal = document.getElementById('casualtyDossierModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function switchDossierTab(tab) {
+  currentDossierTab = tab;
+  ['vitals', 'injuries', 'meds', 'notes', 'vault'].forEach(t => {
+    const btn = document.getElementById(`dosTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
+  renderDossierContent();
+}
+
+function renderDossierContent() {
+  const container = document.getElementById('dossierTabContent');
+  if (!container) return;
+
+  const doc = activeDossierData?.doc;
+  const targetId = activePatient.patientId || activePatient.id;
+
+  if (currentDossierTab === 'vitals') {
+    const vitals = doc?.vitals || [];
+    const listHtml = vitals.length === 0
+      ? '<div style="color: #64748B; font-size: 0.8rem; padding: 10px 0;">No vital signs logged yet. Use Push-to-Talk or the fast record form below.</div>'
+      : vitals.slice().reverse().map(v => `
+          <div class="dossier-card">
+            <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#94A3B8; margin-bottom:4px;">
+              <span>Recorded: ${new Date(v.timestamp).toLocaleTimeString()}</span>
+              <span>Node: <code>${v.recordedByNode}</code></span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:0.8rem;">
+              <div>RR: <strong style="color:#FFF;">${v.respirationRate ?? 'Unrecorded'}</strong>/min</div>
+              <div>Radial Pulse: <strong style="color:${v.radialPulsePresent === false ? '#FF1A1A' : '#00F5D4'};">${v.radialPulsePresent === false ? 'ABSENT' : v.radialPulsePresent === true ? 'PRESENT' : 'Unrecorded'}</strong></div>
+              <div>Mental Status: <strong style="color:${v.mentalStatus === 'ALTERED' ? '#FF1A1A' : '#FFF'};">${v.mentalStatus || 'NORMAL'}</strong></div>
+              <div>Capillary Refill: <strong>${v.capillaryRefillSeconds ? v.capillaryRefillSeconds + 's' : 'Unrecorded'}</strong></div>
+            </div>
+          </div>
+        `).join('');
+
+    container.innerHTML = `
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 0.8rem; font-weight: 700; color: #E2E8F0; margin-bottom: 6px;">Vitals History (${vitals.length})</div>
+        <div style="max-height: 180px; overflow-y: auto;">${listHtml}</div>
+      </div>
+      <div style="background: #090C13; border: 1px solid #1E2839; border-radius: 6px; padding: 10px;">
+        <div style="font-size: 0.76rem; font-weight: 700; color: #00F5D4; margin-bottom: 6px;">+ Quick Vital Signs Entry</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px;">
+          <div>
+            <label style="font-size: 0.68rem; color: #94A3B8;">Respiration Rate</label>
+            <input type="number" id="quickRr" placeholder="e.g. 34" style="width:100%; background:#141A26; border:1px solid #2B3547; color:#FFF; padding:4px 6px; border-radius:4px; font-size:0.8rem;">
+          </div>
+          <div>
+            <label style="font-size: 0.68rem; color: #94A3B8;">Radial Pulse</label>
+            <select id="quickPulse" style="width:100%; background:#141A26; border:1px solid #2B3547; color:#FFF; padding:4px 6px; border-radius:4px; font-size:0.8rem;">
+              <option value="true">Present (Normal)</option>
+              <option value="false">Absent (Critical)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size: 0.68rem; color: #94A3B8;">Mental Status</label>
+            <select id="quickMental" style="width:100%; background:#141A26; border:1px solid #2B3547; color:#FFF; padding:4px 6px; border-radius:4px; font-size:0.8rem;">
+              <option value="NORMAL">Normal / Follows</option>
+              <option value="ALTERED">Altered / Disoriented</option>
+              <option value="UNRESPONSIVE">Unresponsive</option>
+            </select>
+          </div>
+        </div>
+        <button class="dossier-action-btn" style="width:100%; background:rgba(0,245,212,0.15); border-color:#00F5D4; color:#00F5D4;" onclick="submitDossierVitals()">Save Vital Signs (SQLite + CRDT)</button>
+      </div>
+    `;
+  } else if (currentDossierTab === 'injuries') {
+    const injuries = doc?.injuries || [];
+    const listHtml = injuries.length === 0
+      ? '<div style="color: #64748B; font-size: 0.8rem; padding: 10px 0;">No trauma or injuries logged. Select quick preset below.</div>'
+      : injuries.map(i => `
+          <div class="dossier-card" style="border-left: 3px solid #FF1A1A;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong style="color:#FFAAAA; font-size:0.85rem;">⚠️ ${i.classification}</strong>
+              <span style="font-size:0.72rem; color:#94A3B8;">${new Date(i.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div style="font-size:0.75rem; color:#CBD5E1; margin-top:3px;">
+              Location: <strong>${i.anatomicalLocation}</strong> | Tourniquet Applied: <strong style="color:${i.tourniquetApplied ? '#00F5D4' : '#FF1A1A'};">${i.tourniquetApplied ? 'YES' : 'NO'}</strong>
+            </div>
+          </div>
+        `).join('');
+
+    container.innerHTML = `
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 0.8rem; font-weight: 700; color: #E2E8F0; margin-bottom: 6px;">Trauma Log (${injuries.length})</div>
+        <div style="max-height: 180px; overflow-y: auto;">${listHtml}</div>
+      </div>
+      <div style="background: #090C13; border: 1px solid #1E2839; border-radius: 6px; padding: 10px;">
+        <div style="font-size: 0.76rem; font-weight: 700; color: #FFAAAA; margin-bottom: 6px;">+ Record Field Trauma &amp; Hemorrhage Control</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;">
+          <button class="dossier-action-btn" onclick="submitDossierInjury('Right Leg', 'Open Femur Fracture', false)">Right Femur Fracture</button>
+          <button class="dossier-action-btn" onclick="submitDossierInjury('Left Arm', 'Severe Arterial Bleed', true)">Arterial Bleed (Tourniquet applied)</button>
+          <button class="dossier-action-btn" onclick="submitDossierInjury('Structural Collapse', 'Trapped Under Rubble', false)">Trapped in Debris</button>
+          <button class="dossier-action-btn" onclick="submitDossierInjury('Head', 'Closed Head Trauma', false)">Head Trauma</button>
+        </div>
+      </div>
+    `;
+  } else if (currentDossierTab === 'meds') {
+    const meds = doc?.medications || [];
+    const listHtml = meds.length === 0
+      ? '<div style="color: #64748B; font-size: 0.8rem; padding: 10px 0;">No medications administered yet.</div>'
+      : meds.map(m => `
+          <div class="dossier-card" style="border-left: 3px solid #38BDF8;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong style="color:#38BDF8; font-size:0.85rem;">💊 ${m.drugName} (${m.dosage})</strong>
+              <span style="font-size:0.72rem; color:#94A3B8;">${new Date(m.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div style="font-size:0.72rem; color:#94A3B8; margin-top:2px;">
+              Route: <strong>${m.route}</strong> | Signature: <code>${m.medicSignature}</code>
+            </div>
+          </div>
+        `).join('');
+
+    container.innerHTML = `
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 0.8rem; font-weight: 700; color: #E2E8F0; margin-bottom: 6px;">Administered Medications (${meds.length})</div>
+        <div style="max-height: 180px; overflow-y: auto;">${listHtml}</div>
+      </div>
+      <div style="background: #090C13; border: 1px solid #1E2839; border-radius: 6px; padding: 10px;">
+        <div style="font-size: 0.76rem; font-weight: 700; color: #38BDF8; margin-bottom: 6px;">+ Administer Medication (Signed Audit Trail)</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+          <button class="dossier-action-btn" onclick="submitDossierMedication('Morphine Sulfate', '5mg', 'IV')">Morphine 5mg IV</button>
+          <button class="dossier-action-btn" onclick="submitDossierMedication('Fentanyl', '50mcg', 'IV')">Fentanyl 50mcg IV</button>
+          <button class="dossier-action-btn" onclick="submitDossierMedication('Naloxone', '2mg', 'IN')">Naloxone 2mg IN</button>
+          <button class="dossier-action-btn" style="border-color:#F59E0B; color:#F59E0B;" onclick="submitDossierMedication('Amoxicillin', '500mg', 'Oral')">Amoxicillin 500mg Oral (Tests Allergy Collision)</button>
+        </div>
+      </div>
+    `;
+  } else if (currentDossierTab === 'notes') {
+    const notes = doc?.notes || [];
+    const listHtml = notes.length === 0
+      ? '<div style="color: #64748B; font-size: 0.8rem; padding: 10px 0;">No notes or distress transmissions recorded.</div>'
+      : notes.slice().reverse().map(n => `
+          <div class="dossier-card">
+            <div style="display:flex; justify-content:space-between; font-size:0.72rem; color:#64748B; margin-bottom:2px;">
+              <span>Author: <code>${n.author}</code></span>
+              <span>${new Date(n.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div style="font-size:0.8rem; color:#E2E8F0; font-family:monospace;">${n.text}</div>
+          </div>
+        `).join('');
+
+    container.innerHTML = `
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 0.8rem; font-weight: 700; color: #E2E8F0; margin-bottom: 6px;">Notes &amp; Distress Transcripts (${notes.length})</div>
+        <div style="max-height: 180px; overflow-y: auto;">${listHtml}</div>
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <input type="text" id="newDossierNote" placeholder="Type situational note (e.g. 'Trapped in basement B, stable pulse')..." style="flex:1; background:#141A26; border:1px solid #2B3547; color:#FFF; padding:6px 8px; border-radius:4px; font-size:0.8rem;">
+        <button class="dossier-action-btn" onclick="submitDossierNote()" style="background:rgba(0,245,212,0.15); border-color:#00F5D4; color:#00F5D4;">Add Note</button>
+      </div>
+    `;
+  } else if (currentDossierTab === 'vault') {
+    const allergies = doc?.knownAllergies || [];
+    const allergiesHtml = allergies.length === 0
+      ? '<span style="color:#94A3B8;">None documented</span>'
+      : allergies.map(a => `<span style="background:rgba(255,26,26,0.2); border:1px solid #FF1A1A; color:#FFAAAA; padding:2px 6px; border-radius:4px; font-weight:700;">⚠️ ${a}</span>`).join(' ');
+
+    container.innerHTML = `
+      <div class="dossier-card" style="border-left: 3px solid #8B5CF6;">
+        <div style="font-weight: 700; font-size: 0.88rem; color: #C4B5FD; margin-bottom: 6px;">
+          Personal Medical Profile Vault (Principle P10 Isolation)
+        </div>
+        <div style="font-size: 0.76rem; color: #CBD5E1; margin-bottom: 8px;">
+          A citizen's encrypted medical profile is stored locally with AES-256-GCM. An Emergency Medical ID snapshot attaches blood group &amp; documented allergies without exposing private history.
+        </div>
+        <div style="background:#090C13; padding:8px; border-radius:4px; margin-bottom:10px; font-size:0.78rem;">
+          <div>Documented Allergies: ${allergiesHtml}</div>
+        </div>
+        <button class="dossier-action-btn" style="width:100%; background:rgba(139,92,246,0.2); border-color:#8B5CF6; color:#C4B5FD; padding:8px;" onclick="linkEmergencySnapshot('${targetId}')">
+          🔐 Link Emergency Medical ID Snapshot (Aarav Sharma — Penicillin Allergy)
+        </button>
+      </div>
+    `;
+  }
+}
+
+async function submitDossierVitals() {
+  const targetId = activePatient.patientId || activePatient.id;
+  const rr = parseInt(document.getElementById('quickRr')?.value, 10);
+  const pulse = document.getElementById('quickPulse')?.value === 'true';
+  const mental = document.getElementById('quickMental')?.value || 'NORMAL';
+
+  if (isBackendConnected && targetId) {
+    try {
+      await fetch(`${API_BASE}/api/v1/patients/${targetId}/vitals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          respirationRate: isNaN(rr) ? undefined : rr,
+          radialPulsePresent: pulse,
+          mentalStatus: mental
+        })
+      });
+      await openCasualtyDossier(targetId);
+      await loadBackendPatients();
+    } catch (err) {
+      console.warn('[Dossier] Failed to record vitals:', err);
+    }
+  }
+}
+
+async function submitDossierInjury(location, classification, tourniquetApplied = false) {
+  const targetId = activePatient.patientId || activePatient.id;
+  if (isBackendConnected && targetId) {
+    try {
+      await fetch(`${API_BASE}/api/v1/patients/${targetId}/injury`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location, classification, tourniquetApplied })
+      });
+      await openCasualtyDossier(targetId);
+      await loadBackendPatients();
+    } catch (err) {
+      console.warn('[Dossier] Failed to record injury:', err);
+    }
+  }
+}
+
+async function submitDossierMedication(drugName, dosage, route) {
+  const targetId = activePatient.patientId || activePatient.id;
+  if (isBackendConnected && targetId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/patients/${targetId}/medications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drugName, dosage, route })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.divergences && data.divergences.length > 0) {
+          const flag = data.divergences[0];
+          alert(`🚨 FATAL RISK ALERT: Administered ${drugName} collides with documented allergy! (${flag.conflictType})`);
+        }
+      }
+      await openCasualtyDossier(targetId);
+      await loadBackendPatients();
+    } catch (err) {
+      console.warn('[Dossier] Failed to record medication:', err);
+    }
+  }
+}
+
+async function submitDossierNote(overrideText) {
+  const targetId = activePatient.patientId || activePatient.id;
+  const input = document.getElementById('newDossierNote');
+  const text = overrideText || input?.value;
+  if (!text) return;
+
+  if (isBackendConnected && targetId) {
+    try {
+      await fetch(`${API_BASE}/api/v1/patients/${targetId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (input) input.value = '';
+      await openCasualtyDossier(targetId);
+      await loadBackendPatients();
+    } catch (err) {
+      console.warn('[Dossier] Failed to record note:', err);
+    }
+  }
+}
+
+async function linkEmergencySnapshot(patientId) {
+  const targetId = patientId || activePatient.patientId || activePatient.id;
+  if (!isBackendConnected || !targetId) return;
+
+  try {
+    const sampleRes = await fetch(`${API_BASE}/api/v1/vault/sample`);
+    if (sampleRes.ok) {
+      const { snapshot } = await sampleRes.json();
+      const attachRes = await fetch(`${API_BASE}/api/v1/patients/${targetId}/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshot)
+      });
+      if (attachRes.ok) {
+        const result = await attachRes.json();
+        alert(`🔐 Emergency Medical ID linked!\nBlood Group: ${snapshot.bloodGroup}\nDocumented Allergies: ${snapshot.allergies.join(', ')}`);
+        if (result.divergences && result.divergences.length > 0) {
+          alert(`🚨 SEMANTIC DIVERGENCE: Allergy collision detected with prior administered drugs!`);
+        }
+        await openCasualtyDossier(targetId);
+        await loadBackendPatients();
+      }
+    }
+  } catch (err) {
+    console.warn('[Vault] Failed to link emergency snapshot:', err);
   }
 }
 

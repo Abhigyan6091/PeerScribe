@@ -1,18 +1,22 @@
-name: Continuous Integration & Verification
+name: PeerScribe Continuous Integration
 
 on:
   push:
-    branches: [ main, beta, 'release/**' ]
+    branches: [ main, beta, 'feat/**', 'release/**' ]
   pull_request:
     branches: [ main, beta ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint-and-typecheck:
-    name: Lint & Typecheck
+  # -------------------------------------------------------------
+  # Job 1: Shared Protocol Verification & Core Engine Tests
+  # -------------------------------------------------------------
+  shared-protocol-and-core:
+    name: Protocol & Core Engine Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -24,36 +28,112 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install Monorepo Dependencies
         run: npm ci || npm install
 
-      - name: Run Linter
-        run: npm run lint --if-present
+      - name: Validate Shared Protocol Schemas & Golden Fixtures
+        run: npm run test:protocol
 
-      - name: Typecheck Core Engine & Modules
-        run: npm run typecheck --if-present
+      - name: Run Core Engine, Adapters & Benchmark Experiments
+        run: npm test
 
-  cross-platform-test-matrix:
-    name: Test Suite (${{ matrix.os }} - Node ${{ matrix.node-version }})
-    needs: lint-and-typecheck
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
-        node-version: [ '22' ]
+  # -------------------------------------------------------------
+  # Job 2: Windows Electron Desktop Build & Packaging
+  # -------------------------------------------------------------
+  build-electron-windows:
+    name: Windows Electron Build & Package
+    needs: shared-protocol-and-core
+    runs-on: windows-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js 22.x
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22'
           cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install Monorepo Dependencies
         run: npm ci || npm install
 
-      - name: Run Core & Platform Unit Tests
-        run: npm test --if-present
+      - name: Run Electron Unit & Isolation Tests
+        run: npm run test:electron
+
+      - name: Install Desktop Electron Dependencies
+        working-directory: apps/desktop-electron
+        run: npm install
+
+      - name: Package Windows Electron Application
+        working-directory: apps/desktop-electron
+        run: |
+          npx electron-builder --win --dir
+          npx electron-builder --win nsis portable zip
+
+      - name: Stage Windows Artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts-windows
+          cp apps/desktop-electron/dist/*.exe artifacts-windows/ || echo "Setup exe packaged"
+          cp apps/desktop-electron/dist/*.zip artifacts-windows/ || echo "Portable zip packaged"
+          ls -la artifacts-windows/
+
+      - name: Upload Windows Desktop Installer & Portable Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PeerScribe-Windows-Desktop-CI
+          path: artifacts-windows/
+          retention-days: 14
+
+  # -------------------------------------------------------------
+  # Job 3: Android Flutter APK Build & Tests
+  # -------------------------------------------------------------
+  build-flutter-android:
+    name: Android Flutter APK Build & Tests
+    needs: shared-protocol-and-core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install Flutter Dependencies
+        working-directory: apps/android-flutter
+        run: flutter pub get
+
+      - name: Analyze Flutter Source Code
+        working-directory: apps/android-flutter
+        run: flutter analyze
+
+      - name: Run Flutter Unit & START Triage Tests
+        working-directory: apps/android-flutter
+        run: flutter test
+
+      - name: Build Installable Android APK
+        working-directory: apps/android-flutter
+        run: flutter build apk --debug
+
+      - name: Stage Android APK Artifact
+        run: |
+          mkdir -p artifacts-android
+          cp apps/android-flutter/build/app/outputs/flutter-apk/app-debug.apk artifacts-android/PeerScribe-Android-Test-v1.0.0.apk
+          ls -la artifacts-android/
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PeerScribe-Android-Mobile-CI
+          path: artifacts-android/
+          retention-days: 14

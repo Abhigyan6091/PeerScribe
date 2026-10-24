@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://peerscribe.org/schemas/event.v1.json",
+  "title": "PeerScribeEvent",
+  "description": "Immutable operational event model for offline-first clinical replication across Electron and Flutter.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "operation_id",
+    "entity_id",
+    "event_type",
+    "actor_id",
+    "actor_sequence",
+    "lamport_timestamp",
+    "occurred_at_utc",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{8,64}$"
+    },
+    "operation_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "entity_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "PATIENT_CREATED",
+        "OBSERVATION_RECORDED",
+        "VITALS_RECORDED",
+        "INJURY_RECORDED",
+        "ALLERGY_RECORDED",
+        "TRIAGE_STATUS_CHANGED",
+        "MEDICATION_RECORDED",
+        "LOCATION_OBSERVED",
+        "SOS_CREATED",
+        "VAULT_SNAPSHOT_ATTACHED",
+        "DIVERGENCE_ACKNOWLEDGED",
+        "DIVERGENCE_RESOLVED"
+      ]
+    },
+    "actor_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "actor_sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lamport_timestamp": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "causal_context": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "occurred_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

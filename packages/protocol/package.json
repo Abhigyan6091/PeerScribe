@@ -1,0 +1,19 @@
+{
+  "name": "@peerscribe/protocol",
+  "version": "1.0.0",
+  "description": "Language-neutral wire synchronization protocol, JSON schemas and golden test fixtures for PeerScribe",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/protocol.test.ts"
+  },
+  "keywords": [
+    "peerscribe",
+    "protocol",
+    "p2p",
+    "crdt",
+    "json-schema"
+  ],
+  "author": "PeerScribe Open Source Initiative",
+  "license": "Apache-2.0"
+}
