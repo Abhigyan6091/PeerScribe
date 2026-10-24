@@ -83,12 +83,11 @@ jobs:
         run: npm install
 
       - name: Package Windows Electron Application
-        working-directory: apps/desktop-electron
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx -y electron-builder --win nsis zip --publish never
+          npm run package:electron
 
       - name: Stage Windows Release Binaries
         shell: bash

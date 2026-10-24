@@ -25,7 +25,8 @@
     "manifest": "node scripts/generate-manifest.js",
     "start": "node --experimental-strip-types packages/backend-service/src/server.ts",
     "start:daemon": "node --experimental-strip-types packages/backend-service/src/server.ts",
-    "build": "echo 'Building cross-platform distribution targets...'"
+    "build": "echo 'Building cross-platform distribution targets...'",
+    "package:electron": "electron-builder --project apps/desktop-electron --win nsis zip --publish never"
   },
   "keywords": [
     "offline-first",
