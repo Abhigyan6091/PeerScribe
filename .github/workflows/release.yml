@@ -82,14 +82,12 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Install Electron Packaging Toolchain
-        run: npm install -D electron-builder@25.1.8 app-builder-bin
-
       - name: Package Windows Electron Application
+        working-directory: apps/desktop-electron
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --project apps/desktop-electron --win --publish never
+          npx -y electron-builder --win nsis zip --publish never
 
       - name: Stage Windows Release Binaries
         shell: bash
