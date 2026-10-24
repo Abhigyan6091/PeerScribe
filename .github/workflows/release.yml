@@ -82,6 +82,10 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
+      - name: Install Desktop Electron Dependencies
+        working-directory: apps/desktop-electron
+        run: npm install
+
       - name: Package Windows Electron Application
         working-directory: apps/desktop-electron
         run: |

@@ -60,6 +60,10 @@ jobs:
       - name: Run Electron Unit & Isolation Tests
         run: npm run test:electron
 
+      - name: Install Desktop Electron Dependencies
+        working-directory: apps/desktop-electron
+        run: npm install
+
       - name: Package Windows Electron Application
         working-directory: apps/desktop-electron
         run: |

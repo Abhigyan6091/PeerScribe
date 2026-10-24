@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import '../protocol/event_model.dart';
-import '../storage/database_helper.dart';
-import '../storage/personal_vault_store.dart';
-import '../clinical/patient_projection.dart';
-import '../clinical/start_triage_engine.dart';
+import 'package:peerscribe_mobile/core/protocol/event_model.dart';
+import 'package:peerscribe_mobile/core/storage/database_helper.dart';
+import 'package:peerscribe_mobile/core/storage/personal_vault_store.dart';
+import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
+import 'package:peerscribe_mobile/core/clinical/start_triage_engine.dart';
 import 'theme.dart';
 import 'divergence_modal.dart';
 import 'search_heatmap.dart';

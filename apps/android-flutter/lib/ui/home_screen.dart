@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import '../protocol/event_model.dart';
-import '../storage/database_helper.dart';
-import '../storage/personal_vault_store.dart';
-import '../sync/sync_manager.dart';
-import '../clinical/patient_projection.dart';
+import 'package:peerscribe_mobile/core/protocol/event_model.dart';
+import 'package:peerscribe_mobile/core/storage/database_helper.dart';
+import 'package:peerscribe_mobile/core/sync/sync_manager.dart';
+import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
 import 'theme.dart';
 import 'casualty_dossier.dart';
 
@@ -19,7 +18,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String _currentMode = 'FIELD'; // DORMANT | FIELD | EMERGENCY
   final DatabaseHelper _db = DatabaseHelper();
   final SyncManager _sync = SyncManager();
-  final PersonalVaultStore _vault = PersonalVaultStore();
 
   Map<String, dynamic> _operation = {};
   List<ProjectedPatient> _patients = [];

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import '../protocol/event_model.dart';
-import '../storage/database_helper.dart';
+import 'package:peerscribe_mobile/core/protocol/event_model.dart';
+import 'package:peerscribe_mobile/core/storage/database_helper.dart';
 import 'theme.dart';
 
 class DivergenceResolutionDialog extends StatefulWidget {

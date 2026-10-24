@@ -2,6 +2,8 @@
   "name": "@peerscribe/desktop-electron",
   "version": "1.0.0-alpha.1",
   "description": "PeerScribe Windows Desktop Tactical Clinical Mesh Client",
+  "author": "PeerScribe Open Source Initiative",
+  "license": "Apache-2.0",
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
@@ -14,12 +16,13 @@
     "@peerscribe/protocol": "*"
   },
   "devDependencies": {
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8"
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
   },
   "build": {
     "appId": "org.peerscribe.desktop",
     "productName": "PeerScribe Tactical Desktop",
+    "electronVersion": "33.2.1",
     "copyright": "Copyright © 2026 PeerScribe Open Source Initiative",
     "directories": {
       "output": "dist",
