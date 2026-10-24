@@ -66,9 +66,10 @@ jobs:
 
       - name: Package Windows Electron Application
         working-directory: apps/desktop-electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --win --dir
-          npx electron-builder --win nsis portable zip
+          npx electron-builder --win nsis portable zip --publish never
 
       - name: Stage Windows Artifacts
         shell: bash
