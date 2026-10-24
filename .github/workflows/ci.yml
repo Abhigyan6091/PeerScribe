@@ -60,16 +60,11 @@ jobs:
       - name: Run Electron Unit & Isolation Tests
         run: npm run test:electron
 
-      - name: Install Desktop Electron Dependencies
-        working-directory: apps/desktop-electron
-        run: npm install
-
       - name: Package Windows Electron Application
-        working-directory: apps/desktop-electron
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --win nsis portable zip --publish never
+          npx electron-builder --project apps/desktop-electron --win nsis portable zip --publish never
 
       - name: Stage Windows Artifacts
         shell: bash

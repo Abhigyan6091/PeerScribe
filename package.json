@@ -40,5 +40,9 @@
     "automerge"
   ],
   "author": "PeerScribe Open Source Initiative",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  }
 }

@@ -13,7 +13,6 @@
     "test": "node --test tests/desktop.test.cjs"
   },
   "dependencies": {
-    "@peerscribe/protocol": "*",
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
