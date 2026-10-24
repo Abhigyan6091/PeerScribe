@@ -656,9 +656,14 @@
     <header class="tactical-bar">
       <div class="brand-title">
         <div class="pulse-dot" id="modePulseDot"></div>
-        PEERSCRIBE
+        PEERSCRIBE <span style="font-size: 0.7rem; color: #00F5D4; border: 1px solid #00F5D4; padding: 1px 6px; border-radius: 4px; margin-left: 4px; font-weight: 800;">v1.0</span>
       </div>
-      <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()" title="Click to cycle modes: FIELD → EMERGENCY → DORMANT">FIELD</div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button type="button" id="btnCheckDeltaUpdates" onclick="checkDeltaUpdates()" style="background: rgba(0,245,212,0.15); border: 1px solid #00F5D4; color: #00F5D4; border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="Check for in-place differential updates">
+          ⚡ DELTA UPDATE
+        </button>
+        <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()" title="Click to cycle modes: FIELD → EMERGENCY → DORMANT">FIELD</div>
+      </div>
     </header>
 
     <!-- Operation Context Card -->

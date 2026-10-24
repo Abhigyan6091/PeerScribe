@@ -80,16 +80,14 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
-
-      - name: Install Desktop Electron Dependencies
-        working-directory: apps/desktop-electron
         run: npm install
 
       - name: Package Windows Electron Application
-        working-directory: apps/desktop-electron
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --win nsis portable zip
+          npm run package:electron
 
       - name: Stage Windows Release Binaries
         shell: bash
@@ -97,6 +95,8 @@ jobs:
           mkdir -p release-windows
           VER="${{ needs.validate-and-test.outputs.release_version }}"
           cp apps/desktop-electron/dist/*.exe "release-windows/PeerScribe-Windows-Setup-v${VER}.exe" || echo "Setup exe ready"
+          cp apps/desktop-electron/dist/*.blockmap release-windows/ 2>/dev/null || echo "Blockmaps ready"
+          cp apps/desktop-electron/dist/*.yml release-windows/ 2>/dev/null || echo "Update manifests ready"
           cp apps/desktop-electron/dist/*.zip "release-windows/PeerScribe-Windows-Portable-v${VER}.zip" || echo "Portable zip ready"
 
       - name: Upload Windows Binaries Artifact

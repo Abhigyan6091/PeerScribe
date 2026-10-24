@@ -1,6 +1,6 @@
 {
   "name": "@peerscribe/desktop-electron",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0",
   "description": "PeerScribe Windows Desktop Tactical Clinical Mesh Client",
   "author": "PeerScribe Open Source Initiative",
   "license": "Apache-2.0",
@@ -12,18 +12,25 @@
     "dist:portable": "electron-builder --win portable zip",
     "test": "node --test tests/desktop.test.cjs"
   },
-  "dependencies": {
-    "@peerscribe/protocol": "*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "electron": "33.2.1",
-    "electron-builder": "25.1.8"
+    "electron-builder": "^26.0.0"
   },
   "build": {
     "appId": "org.peerscribe.desktop",
     "productName": "PeerScribe Tactical Desktop",
     "electronVersion": "33.2.1",
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
     "copyright": "Copyright © 2026 PeerScribe Open Source Initiative",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Abhigyan6091",
+        "repo": "PeerScribe"
+      }
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -40,22 +47,19 @@
           "arch": ["x64"]
         },
         {
-          "target": "portable",
-          "arch": ["x64"]
-        },
-        {
           "target": "zip",
           "arch": ["x64"]
         }
       ],
-      "artifactName": "PeerScribe-Windows-${channel}-${version}-${arch}.${ext}"
+      "artifactName": "PeerScribe-Windows-v${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "PeerScribe Tactical Mesh"
+      "shortcutName": "PeerScribe Tactical Mesh",
+      "differentialPackage": true
     }
   }
 }

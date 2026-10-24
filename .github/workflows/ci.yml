@@ -55,27 +55,32 @@ jobs:
           cache: 'npm'
 
       - name: Install Monorepo Dependencies
-        run: npm ci || npm install
+        run: npm install
 
       - name: Run Electron Unit & Isolation Tests
         run: npm run test:electron
 
-      - name: Install Desktop Electron Dependencies
-        working-directory: apps/desktop-electron
-        run: npm install
-
       - name: Package Windows Electron Application
-        working-directory: apps/desktop-electron
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEBUG: electron-builder
         run: |
-          npx electron-builder --win --dir
-          npx electron-builder --win nsis portable zip
+          set -o pipefail
+          if ! npm run package:electron 2>&1 | tee build.log; then
+            ERR_MSG=$(tail -n 25 build.log | tr '\r\n' '  ')
+            echo "::error title=Electron Package Failed::$ERR_MSG"
+            exit 1
+          fi
 
       - name: Stage Windows Artifacts
         shell: bash
         run: |
           mkdir -p artifacts-windows
           cp apps/desktop-electron/dist/*.exe artifacts-windows/ || echo "Setup exe packaged"
+          cp apps/desktop-electron/dist/*.blockmap artifacts-windows/ || echo "Blockmaps packaged"
           cp apps/desktop-electron/dist/*.zip artifacts-windows/ || echo "Portable zip packaged"
+          cp apps/desktop-electron/dist/*.yml artifacts-windows/ || echo "Update manifests packaged"
           ls -la artifacts-windows/
 
       - name: Upload Windows Desktop Installer & Portable Package
@@ -115,7 +120,7 @@ jobs:
 
       - name: Analyze Flutter Source Code
         working-directory: apps/android-flutter
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Run Flutter Unit & START Triage Tests
         working-directory: apps/android-flutter

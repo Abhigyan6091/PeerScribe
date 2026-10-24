@@ -1,6 +1,6 @@
 {
   "name": "peerscribe",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0",
   "description": "An Offline-First, Peer-to-Peer Clinical Coordination and Emergency Information System",
   "private": true,
   "type": "module",
@@ -25,7 +25,8 @@
     "manifest": "node scripts/generate-manifest.js",
     "start": "node --experimental-strip-types packages/backend-service/src/server.ts",
     "start:daemon": "node --experimental-strip-types packages/backend-service/src/server.ts",
-    "build": "echo 'Building cross-platform distribution targets...'"
+    "build": "echo 'Building cross-platform distribution targets...'",
+    "package:electron": "electron-builder --project apps/desktop-electron --win nsis zip --publish never"
   },
   "keywords": [
     "offline-first",
@@ -40,5 +41,9 @@
     "automerge"
   ],
   "author": "PeerScribe Open Source Initiative",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^26.0.0"
+  }
 }
