@@ -12,9 +12,7 @@
     "dist:portable": "electron-builder --win portable zip",
     "test": "node --test tests/desktop.test.cjs"
   },
-  "dependencies": {
-    "electron-updater": "^6.3.9"
-  },
+  "dependencies": {},
   "devDependencies": {
     "electron": "33.2.1",
     "electron-builder": "25.1.8"
