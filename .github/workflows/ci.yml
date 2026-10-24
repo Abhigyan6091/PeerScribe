@@ -64,8 +64,14 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEBUG: electron-builder
         run: |
-          npm run package:electron
+          set -o pipefail
+          if ! npm run package:electron 2>&1 | tee build.log; then
+            ERR_MSG=$(tail -n 25 build.log | tr '\r\n' '  ')
+            echo "::error title=Electron Package Failed::$ERR_MSG"
+            exit 1
+          fi
 
       - name: Stage Windows Artifacts
         shell: bash
