@@ -84,6 +84,7 @@ jobs:
 
       - name: Package Windows Electron Application
         working-directory: apps/desktop-electron
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
