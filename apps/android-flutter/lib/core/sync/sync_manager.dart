@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import '../protocol/event_model.dart';
 import '../protocol/sync_bundle.dart';

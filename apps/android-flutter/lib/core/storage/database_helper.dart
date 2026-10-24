@@ -1,4 +1,3 @@
-import 'dart:convert';
 import '../protocol/event_model.dart';
 
 /// Database Helper providing SQLite persistence with append-only immutable events,

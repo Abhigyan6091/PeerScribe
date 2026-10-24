@@ -142,7 +142,7 @@ class _DivergenceResolutionDialogState extends State<DivergenceResolutionDialog>
               decoration: InputDecoration(
                 filled: true,
                 fillColor: TacticalTheme.surfaceVariant,
-                border: OutlineInputBorder(borderColor: TacticalTheme.border),
+                border: const OutlineInputBorder(borderSide: BorderSide(color: TacticalTheme.border)),
                 hintText: 'e.g. Confirmed RED due to acute respiratory distress',
                 hintStyle: const TextStyle(color: TacticalTheme.textMuted),
               ),

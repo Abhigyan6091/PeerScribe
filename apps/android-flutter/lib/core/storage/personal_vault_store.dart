@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 /// Local Encrypted Personal Health Vault.
 /// Strictly decoupled from temporary disaster operation records.
 class PersonalVaultStore {
