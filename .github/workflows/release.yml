@@ -97,6 +97,8 @@ jobs:
           mkdir -p release-windows
           VER="${{ needs.validate-and-test.outputs.release_version }}"
           cp apps/desktop-electron/dist/*.exe "release-windows/PeerScribe-Windows-Setup-v${VER}.exe" || echo "Setup exe ready"
+          cp apps/desktop-electron/dist/*.blockmap release-windows/ 2>/dev/null || echo "Blockmaps ready"
+          cp apps/desktop-electron/dist/*.yml release-windows/ 2>/dev/null || echo "Update manifests ready"
           cp apps/desktop-electron/dist/*.zip "release-windows/PeerScribe-Windows-Portable-v${VER}.zip" || echo "Portable zip ready"
 
       - name: Upload Windows Binaries Artifact

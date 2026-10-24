@@ -75,7 +75,9 @@ jobs:
         run: |
           mkdir -p artifacts-windows
           cp apps/desktop-electron/dist/*.exe artifacts-windows/ || echo "Setup exe packaged"
+          cp apps/desktop-electron/dist/*.blockmap artifacts-windows/ || echo "Blockmaps packaged"
           cp apps/desktop-electron/dist/*.zip artifacts-windows/ || echo "Portable zip packaged"
+          cp apps/desktop-electron/dist/*.yml artifacts-windows/ || echo "Update manifests packaged"
           ls -la artifacts-windows/
 
       - name: Upload Windows Desktop Installer & Portable Package

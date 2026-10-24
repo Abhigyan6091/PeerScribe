@@ -8,6 +8,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'system:get-status',
   'system:set-mode',
   'system:wipe-data',
+  'system:check-updates',
+  'system:download-update',
+  'system:apply-update',
   'operation:get-active',
   'operation:create',
   'operation:finalize',
@@ -30,13 +33,16 @@ const ALLOWED_INVOKE_CHANNELS = [
 const ALLOWED_RECEIVE_CHANNELS = [
   'sync:event-received',
   'sync:divergence-flagged',
-  'sync:status-updated'
+  'sync:status-updated',
+  'system:update-available',
+  'system:update-progress',
+  'system:update-downloaded'
 ];
 
 contextBridge.exposeInMainWorld('peerScribeDesktop', {
   isElectron: true,
   platform: 'windows',
-  version: '1.0.0-alpha.1',
+  version: '1.0.0',
 
   invoke: (channel, data) => {
     if (!ALLOWED_INVOKE_CHANNELS.includes(channel)) {

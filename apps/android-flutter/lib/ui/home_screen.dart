@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import 'package:peerscribe_mobile/core/protocol/event_model.dart';
 import 'package:peerscribe_mobile/core/storage/database_helper.dart';
 import 'package:peerscribe_mobile/core/sync/sync_manager.dart';
+import 'package:peerscribe_mobile/core/sync/delta_update_manager.dart';
 import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
 import 'theme.dart';
 import 'casualty_dossier.dart';
@@ -147,12 +148,62 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _checkForDeltaUpdates() async {
+    final update = await DeltaUpdateManager().checkForUpdates();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: TacticalTheme.surface,
+        title: Row(
+          children: const [
+            Icon(Icons.system_update_alt, color: TacticalTheme.primary),
+            SizedBox(width: 8),
+            Text('DELTA UPDATES', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Installed Version: v${update.currentVersion}', style: const TextStyle(color: TacticalTheme.textPrimary, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(update.releaseNotes ?? 'PeerScribe is up-to-date.', style: const TextStyle(color: TacticalTheme.textSecondary, fontSize: 13)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: TacticalTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'Delta updates enabled: In-place differential patch application without manual APK reinstallation.',
+                style: TextStyle(color: TacticalTheme.primary, fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('DISMISS', style: TextStyle(color: TacticalTheme.textMuted)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PEERSCRIBE TACTICAL'),
+        title: const Text('PEERSCRIBE v1.0'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.system_update, size: 20, color: TacticalTheme.primary),
+            tooltip: 'Check Delta Updates',
+            onPressed: _checkForDeltaUpdates,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12.0),
             child: Center(child: _buildModeBadge()),

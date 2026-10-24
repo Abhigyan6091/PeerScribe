@@ -1,6 +1,6 @@
 {
   "name": "peerscribe",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0",
   "description": "An Offline-First, Peer-to-Peer Clinical Coordination and Emergency Information System",
   "private": true,
   "type": "module",
