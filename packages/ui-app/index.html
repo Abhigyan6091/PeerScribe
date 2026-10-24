@@ -3,9 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="PeerScribe: Offline-first peer-to-peer clinical coordination for disaster response. Works without internet — mesh BLE sync, deterministic START triage AI, and cryptographic audit trails.">
+  <meta name="theme-color" content="#090A0D">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>PeerScribe | Tactical Clinical Mesh</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles/tokens.css">
   <style>
+    /* Use JetBrains Mono for monospace sections */
+    .tactical-bar, .tele-card, .voice-panel { font-family: 'Inter', -apple-system, sans-serif; }
+    code, .tele-card, .voice-input, #vuMeterDb, .ptt-timer-badge { font-family: 'JetBrains Mono', monospace; }
     /* Tactical Layout Styles */
     .app-container {
       max-width: 600px;
@@ -559,6 +570,83 @@
     .tele-field strong {
       color: #E2E8F0;
     }
+    /* Dossier Modal */
+    .dossier-box {
+      background: #0D111A;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: var(--border-radius-tactical);
+      padding: 18px;
+      max-width: 560px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      color: #FFF;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+    }
+    .dossier-nav {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      border-bottom: 1px solid #1F2839;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+    }
+    .dossier-tab-btn {
+      background: transparent;
+      border: 1px solid #2B3547;
+      color: #94A3B8;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .dossier-tab-btn.active {
+      background: rgba(0, 245, 212, 0.15);
+      border-color: #00F5D4;
+      color: #00F5D4;
+    }
+    .dossier-card {
+      background: #131824;
+      border: 1px solid #1F2839;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .dossier-action-btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid #334155;
+      color: #F8FAFC;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .dossier-action-btn:hover {
+      background: rgba(255,255,255,0.18);
+      border-color: #00F5D4;
+    }
+    /* Radar Search Heatmap */
+    .radar-container {
+      position: relative;
+      width: 100%;
+      height: 220px;
+      background: #080B11;
+      border: 1px solid #1A2333;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .radar-canvas {
+      width: 100%;
+      height: 100%;
+    }
   </style>
 </head>
 <body>
@@ -613,8 +701,11 @@
           <div class="phonetic-id" id="activePatientId">RED-PANTHER-04</div>
           <div id="activePatientSubtext" style="font-size: 0.74rem; color: #94A3B8; margin-top: 2px; font-family: monospace;">Awaiting evaluation</div>
           <div id="activePatientInjuries" style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;"></div>
+          <button type="button" class="dossier-action-btn" onclick="openCasualtyDossier()" style="margin-top: 6px; display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem;">
+            📋 Open Clinical Dossier &amp; Chart
+          </button>
         </div>
-        <div class="identicon-box" id="activeIdenticon">
+        <div class="identicon-box" id="activeIdenticon" onclick="openCasualtyDossier()" style="cursor: pointer;" title="Click to open clinical dossier">
           <!-- 4x4 Identicon SVG -->
           <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/><rect x="0" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="24" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="12" y="12" width="12" height="12" fill="#FF1A1A"/><rect x="36" y="24" width="12" height="12" fill="#FF1A1A"/><rect x="0" y="36" width="12" height="12" fill="#FF1A1A"/></svg>
         </div>
@@ -696,6 +787,26 @@
       </div>
     </section>
 
+    <!-- Triage Summary Count Bar -->
+    <div id="triageSummaryBar" style="display: flex; gap: 6px; margin-bottom: 2px;">
+      <div style="flex:1; background: rgba(255,26,26,0.18); border: 1px solid rgba(255,26,26,0.4); border-radius: 4px; padding: 5px 10px; text-align: center;">
+        <div style="font-size: 0.68rem; color: #FF7070; font-weight: 800; letter-spacing: 0.5px;">RED</div>
+        <div id="countRed" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-red);">0</div>
+      </div>
+      <div style="flex:1; background: rgba(255,184,0,0.18); border: 1px solid rgba(255,184,0,0.4); border-radius: 4px; padding: 5px 10px; text-align: center;">
+        <div style="font-size: 0.68rem; color: #FFCB47; font-weight: 800; letter-spacing: 0.5px;">YELLOW</div>
+        <div id="countYellow" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-yellow);">0</div>
+      </div>
+      <div style="flex:1; background: rgba(0,230,118,0.12); border: 1px solid rgba(0,230,118,0.35); border-radius: 4px; padding: 5px 10px; text-align: center;">
+        <div style="font-size: 0.68rem; color: #4FFFAA; font-weight: 800; letter-spacing: 0.5px;">GREEN</div>
+        <div id="countGreen" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-green);">0</div>
+      </div>
+      <div style="flex:1; background: rgba(80,86,100,0.3); border: 1px solid rgba(80,86,100,0.5); border-radius: 4px; padding: 5px 10px; text-align: center;">
+        <div style="font-size: 0.68rem; color: #A0AEC0; font-weight: 800; letter-spacing: 0.5px;">BLACK</div>
+        <div id="countBlack" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-black);">0</div>
+      </div>
+    </div>
+
     <!-- Casualty Feed -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; margin-bottom: 6px;">
       <div class="section-header" style="margin-top: 0;">Active Sector Casualties (Sorted by Severity)</div>
@@ -727,6 +838,50 @@
       </div>
     </div>
 
+    <!-- Probabilistic Location Recovery & Monte Carlo Search Heatmap (Phase 7) -->
+    <section class="location-section" style="background: var(--bg-surface); border: var(--border-thick); border-radius: var(--border-radius-tactical); padding: 12px; margin-top: 14px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleLocationSection()">
+        <div style="font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #00F5D4; box-shadow: 0 0 6px #00F5D4;"></span>
+          SEARCH &amp; RECOVERY HEATMAP (PHASE 7)
+        </div>
+        <div id="locationToggleText" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 700;">[SHOW ▼]</div>
+      </div>
+
+      <div id="locationBody" style="margin-top: 12px; display: none;">
+        <div style="font-size: 0.74rem; color: #94A3B8; margin-bottom: 8px; font-family: monospace;">
+          Sequential Monte Carlo (Particle Filter): Estimates search contours around LKP (27.7172° N, 85.3240° E) with kinematic Brownian motion &amp; Bayesian peer sighting contraction.
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; font-family: monospace; font-size: 0.72rem;">
+          <div style="background: #0E131E; border: 1px solid rgba(255,26,26,0.35); border-radius: 4px; padding: 6px; text-align: center;">
+            <div style="color: #FF7070; font-weight: 700;">90% MASS</div>
+            <div id="radius90Text" style="font-size: 1.15rem; font-weight: 900; color: #FF1A1A;">-- m</div>
+          </div>
+          <div style="background: #0E131E; border: 1px solid rgba(255,184,0,0.35); border-radius: 4px; padding: 6px; text-align: center;">
+            <div style="color: #FFCB47; font-weight: 700;">75% MASS</div>
+            <div id="radius75Text" style="font-size: 1.15rem; font-weight: 900; color: #FFB800;">-- m</div>
+          </div>
+          <div style="background: #0E131E; border: 1px solid rgba(0,245,212,0.35); border-radius: 4px; padding: 6px; text-align: center;">
+            <div style="color: #4FFFAA; font-weight: 700;">50% MASS</div>
+            <div id="radius50Text" style="font-size: 1.15rem; font-weight: 900; color: #00F5D4;">-- m</div>
+          </div>
+        </div>
+
+        <!-- Radar Heatmap Canvas -->
+        <div class="radar-container">
+          <canvas id="searchRadarCanvas" width="560" height="220" class="radar-canvas"></canvas>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; flex-wrap: wrap;">
+          <button class="dossier-action-btn" style="background: rgba(0,245,212,0.15); border-color: #00F5D4; color: #00F5D4; flex: 1;" onclick="triggerSightingObservation()">
+            📡 Ingest Opportunistic Peer Sighting (Bayesian Contraction)
+          </button>
+          <div id="sightingFeedback" style="font-size: 0.72rem; color: #00F5D4; font-family: monospace;"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Real-time Tactical Mesh Telemetry & BitChat Wire Inspector -->
     <section class="telemetry-section" style="background: var(--bg-surface); border: var(--border-thick); border-radius: var(--border-radius-tactical); padding: 12px; margin-top: 14px;">
       <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleTelemetry()">
@@ -756,8 +911,8 @@
 
   <!-- Bottom Tactical Bar -->
   <footer class="footer-bar">
-    <div style="font-size: 0.75rem; color: var(--text-secondary);">
-      BLE Mesh: <strong style="color: #FFF;">Connected (Hop 1/15)</strong> | CRDT Replicas: <strong style="color: #FFF;">3 Synced</strong>
+    <div id="footerStatus" style="font-size: 0.75rem; color: var(--text-secondary);">
+      BLE Mesh: <strong style="color: #FFF;">Initializing...</strong>
     </div>
     <button class="wipe-btn" onclick="triggerEmergencyWipe()">EMERGENCY WIPE</button>
   </footer>
@@ -787,6 +942,37 @@
       <button class="resolve-btn" onclick="resolveConflict('RED')">CONFIRM AS RED (IMMEDIATE)</button>
       <button class="resolve-btn" style="background: var(--triage-yellow); color: #000; margin-top: 8px;" onclick="resolveConflict('YELLOW')">CONFIRM AS YELLOW (DELAYED)</button>
       <button class="wipe-btn" style="width: 100%; margin-top: 10px;" onclick="closeDivergenceModal()">CANCEL</button>
+    </div>
+  </div>
+
+  <!-- Comprehensive Patient Clinical Dossier & Treatment Modal -->
+  <div class="modal-overlay" id="casualtyDossierModal" style="display: none;">
+    <div class="dossier-box">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #1F2839; padding-bottom: 12px; margin-bottom: 12px;">
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <div class="identicon-box" id="dossierIdenticon" style="width: 44px; height: 44px;"></div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="phonetic-id" id="dossierEphemeralId" style="font-size: 1.3rem;">CASUALTY</span>
+              <span id="dossierTriageBadge" style="padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.75rem;">RED</span>
+            </div>
+            <div id="dossierPatientId" style="font-size: 0.68rem; color: #64748B; font-family: monospace;">UUID</div>
+          </div>
+        </div>
+        <button class="dossier-action-btn" onclick="closeCasualtyDossier()" style="padding: 4px 10px;">✕ Close</button>
+      </div>
+
+      <!-- Dossier Navigation Tabs -->
+      <div class="dossier-nav">
+        <button class="dossier-tab-btn active" id="dosTabVitals" onclick="switchDossierTab('vitals')">Vitals History</button>
+        <button class="dossier-tab-btn" id="dosTabInjuries" onclick="switchDossierTab('injuries')">Trauma &amp; Injuries</button>
+        <button class="dossier-tab-btn" id="dosTabMeds" onclick="switchDossierTab('meds')">Medications</button>
+        <button class="dossier-tab-btn" id="dosTabNotes" onclick="switchDossierTab('notes')">Clinical Notes</button>
+        <button class="dossier-tab-btn" id="dosTabVault" onclick="switchDossierTab('vault')">Emergency Medical ID</button>
+      </div>
+
+      <!-- Dossier Tab Content Container -->
+      <div id="dossierTabContent"></div>
     </div>
   </div>
 

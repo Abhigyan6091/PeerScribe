@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://peerscribe.org/schemas/patient.v1.json",
+  "title": "PeerScribePatientDocument",
+  "description": "Projected deterministic patient document state derived from the immutable event log.",
+  "type": "object",
+  "required": [
+    "patient_id",
+    "operation_id",
+    "ephemeral_id",
+    "active_triage",
+    "created_at_utc",
+    "updated_at_utc"
+  ],
+  "properties": {
+    "patient_id": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": "string"
+    },
+    "ephemeral_id": {
+      "type": "string",
+      "pattern": "^[A-Z]+-[A-Z]+-[0-9]{2}$"
+    },
+    "active_triage": {
+      "type": "string",
+      "enum": [ "RED", "YELLOW", "GREEN", "BLACK", "UNASSESSED" ]
+    },
+    "created_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "vector_clock": {
+      "type": "object"
+    },
+    "vitals": {
+      "type": "array"
+    },
+    "injuries": {
+      "type": "array"
+    },
+    "medications": {
+      "type": "array"
+    },
+    "known_allergies": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array"
+    },
+    "divergence_flags": {
+      "type": "array"
+    }
+  }
+}

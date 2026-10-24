@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://peerscribe.org/schemas/sync_bundle.v1.json",
+  "title": "PeerScribeSyncBundle",
+  "description": "Wire bundle carrying batches of immutable events across LAN WebSockets and store-and-forward relays.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "operation_id",
+    "origin_node_id",
+    "priority",
+    "hop_count",
+    "max_hops",
+    "created_at_utc",
+    "vector_clock",
+    "events"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{8,64}$"
+    },
+    "operation_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "origin_node_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "priority": {
+      "type": "string",
+      "enum": [ "CRITICAL_SOS", "CLINICAL_DELTA", "ROUTINE" ]
+    },
+    "hop_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 15
+    },
+    "max_hops": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 15
+    },
+    "created_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "vector_clock": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "event.schema.json"
+      }
+    },
+    "bloom_filter_hex": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

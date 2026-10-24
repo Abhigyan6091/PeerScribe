@@ -246,3 +246,30 @@ test('Backend Service Daemon: Tri-Modal Power Transitions & Gateway Adaptation',
 
   assert.strictEqual(modeEventCount, 3);
 });
+
+test('Backend Service Daemon: Emergency Snapshot Attachment & Drug Allergy Divergence', () => {
+  const daemon = new PeerScribeDaemon({ dbPath: ':memory:' });
+  const patient = daemon.createPatient('ORANGE-FALCON-08');
+
+  // Medic administers Amoxicillin
+  daemon.recordMedication(patient.patientId, 'Amoxicillin', '500mg', 'Oral');
+
+  // Attach Emergency Medical ID Snapshot with documented Penicillin allergy
+  const snapshotResult = daemon.attachEmergencySnapshot(patient.patientId, {
+    bloodGroup: 'B+',
+    allergies: ['Penicillin'],
+    criticalConditions: ['Asthma'],
+    currentMedicationsSummary: ['Albuterol Inhaler'],
+    emergencyContacts: [{ name: 'Sita', relation: 'Sister', phone: '+977-9812345678' }],
+    extractedAt: Date.now()
+  });
+
+  // Level 2 Semantic Safety Analyzer should immediately flag DIV_DRUG_ALLERGY!
+  assert.ok(snapshotResult.divergences.length > 0);
+  assert.strictEqual(snapshotResult.divergences[0].conflictType, 'DIV_DRUG_ALLERGY');
+  assert.strictEqual(snapshotResult.divergences[0].severity, 'FATAL_RISK');
+
+  // Verify SQLite WAL persistence of DTN bundle and audit event
+  const dtnBundles = daemon.db.listPendingDtnBundles(daemon.currentOperationId);
+  assert.ok(dtnBundles.length >= 2);
+});

@@ -27,7 +27,8 @@ import {
   PacketFlags,
   crc32,
   createNostrMeshEvent,
-  sha256
+  sha256,
+  type EmergencyMedicalSnapshot
 } from '../../core-engine/src/index.ts';
 
 export type OperationalMode = 'DORMANT' | 'FIELD' | 'EMERGENCY';
@@ -233,8 +234,8 @@ export class PeerScribeDaemon extends EventEmitter {
     this.recentWirePackets.unshift(wireTelemetry);
     if (this.recentWirePackets.length > 30) this.recentWirePackets.pop();
 
-    // 2. DTN Store-and-Forward Outbox
-    this.dtnOutbox.enqueue({
+    // 2. DTN Store-and-Forward Outbox (Memory Queue + Durable SQLite WAL table)
+    const dtnBundle = {
       bundleId: delta.deltaId,
       operationId: this.currentOperationId,
       priority,
@@ -243,7 +244,9 @@ export class PeerScribeDaemon extends EventEmitter {
       createdAt: Date.now(),
       ttlMs: 3600000,
       payload: wirePacket
-    });
+    };
+    this.dtnOutbox.enqueue(dtnBundle);
+    this.db.enqueueDtnBundle(dtnBundle);
 
     // 3. BitChat Nostr Kind 20042 Mesh Sync Event
     const nostrSecret = Buffer.alloc(32, 0x5a); // Shared tactical cluster secret
@@ -423,14 +426,71 @@ export class PeerScribeDaemon extends EventEmitter {
     return updatedDoc;
   }
 
+  attachEmergencySnapshot(
+    patientId: string,
+    snapshot: EmergencyMedicalSnapshot
+  ): { doc: CrdtPatientDocument; activeTriage: TriageCategory | 'UNASSESSED'; divergences: any[] } {
+    let doc = this.db.getPatientDocument(patientId);
+    if (!doc) {
+      const all = this.listPatients();
+      const byEphem = all.find(p => p.doc.patientId === patientId || p.doc.ephemeralId === patientId);
+      if (byEphem) doc = byEphem.doc;
+    }
+    if (!doc) throw new Error(`Patient ${patientId} not found`);
+
+    // Attach allergies from emergency snapshot
+    const mergedAllergies = Array.from(new Set([...(doc.knownAllergies || []), ...(snapshot.allergies || [])]));
+    doc.knownAllergies = mergedAllergies;
+
+    // Attach emergency snapshot summary note
+    const summary = `[EMERGENCY MEDICAL ID ATTACHED] Blood Group: ${snapshot.bloodGroup || 'UNKNOWN'} | Allergies: ${(snapshot.allergies || []).join(', ') || 'None'} | Conditions: ${(snapshot.criticalConditions || []).join(', ') || 'None'}`;
+    const { updatedDoc: docWithNote, delta } = recordNote(doc, this.nodeId, summary);
+    doc = docWithNote;
+
+    // Check for drug allergy collision or semantic divergence
+    const divergences = analyzeSemanticSafety(doc);
+    const analyzedDoc = applyDivergenceAnalysis(doc);
+    const activeTriage = getActiveTriageCategory(analyzedDoc);
+
+    this.db.savePatientDocument(analyzedDoc, activeTriage);
+    this.db.logAuditEvent(this.generateAuditId(), patientId, 'VAULT_SNAPSHOT_ATTACHED', this.nodeId, {
+      bloodGroup: snapshot.bloodGroup,
+      allergies: snapshot.allergies,
+      divergences
+    });
+
+    this.packageAndPropagateDelta(delta, patientId, analyzedDoc.ephemeralId, BundlePriority.CLINICAL_DELTA, 'CLINICAL_DELTA');
+    this.logActivity('SECURITY', `Attached Medical ID to ${analyzedDoc.ephemeralId}`, { bloodGroup: snapshot.bloodGroup, allergies: snapshot.allergies });
+    this.emit('patientUpdated', { doc: analyzedDoc, activeTriage, divergences });
+    return { doc: analyzedDoc, activeTriage, divergences };
+  }
+
   processVoiceTranscript(transcript: string, patientId?: string): any {
     const aiResult = extractAndEvaluateTriage(transcript);
     
-    let targetDoc: CrdtPatientDocument;
+    let targetDoc: CrdtPatientDocument | null = null;
+
     if (patientId) {
-      targetDoc = this.db.getPatientDocument(patientId) || this.createPatient();
-    } else {
-      targetDoc = this.createPatient();
+      // 1. Direct lookup by patient ID (primary key)
+      targetDoc = this.db.getPatientDocument(patientId);
+
+      // 2. Fallback: search all patients by ephemeral ID prefix (handles pt_xxx frontend IDs)
+      if (!targetDoc) {
+        const allPatients = this.listPatients();
+        const byEphemeral = allPatients.find(p => p.doc.patientId === patientId || p.doc.ephemeralId === patientId);
+        if (byEphemeral) targetDoc = byEphemeral.doc;
+      }
+    }
+
+    // 3. If no patient found (truly new voice intake), use the active/most-recent patient or create one
+    if (!targetDoc) {
+      const existingPatients = this.listPatients();
+      if (existingPatients.length > 0) {
+        // Attach to most recently updated patient if no specific ID given
+        targetDoc = existingPatients[0].doc;
+      } else {
+        targetDoc = this.createPatient();
+      }
     }
 
     // 1. Record vitals if mentioned

@@ -5,12 +5,15 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
     "lint": "echo 'Linting checks passed.'",
     "typecheck": "echo 'Typechecking verified.'",
-    "test": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts packages/backend-service/tests/daemon.test.ts tests/benchmarks/experiments.test.ts",
+    "test": "node --experimental-strip-types --test packages/protocol/tests/protocol.test.ts packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts packages/backend-service/tests/daemon.test.ts tests/benchmarks/experiments.test.ts apps/desktop-electron/tests/desktop.test.cjs",
+    "test:protocol": "node --experimental-strip-types --test packages/protocol/tests/protocol.test.ts",
+    "test:electron": "node --test apps/desktop-electron/tests/desktop.test.cjs",
     "test:coverage": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts",
     "test:daemon": "node --experimental-strip-types --test packages/backend-service/tests/daemon.test.ts",
     "test:bench:crdt": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",

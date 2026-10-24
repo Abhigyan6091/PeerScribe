@@ -115,13 +115,43 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         return;
       }
 
-      // Patient action routes: /api/v1/patients/:id/...
       const triageMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/triage$/);
       if (triageMatch && req.method === 'POST') {
         const patientId = triageMatch[1];
         const body = await readJsonBody();
         const result = node.recordTriage(patientId, body.category, body.protocol, body.overrideReason);
         sendJson(200, result);
+        return;
+      }
+
+      const notesMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/notes$/);
+      if (notesMatch && req.method === 'POST') {
+        const patientId = notesMatch[1];
+        const body = await readJsonBody();
+        if (!body.text) { sendJson(400, { error: 'Field "text" required' }); return; }
+        const updatedDoc = node.recordNote(patientId, body.text);
+        sendJson(200, updatedDoc);
+        return;
+      }
+
+      const injuryMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/injury$/);
+      if (injuryMatch && req.method === 'POST') {
+        const patientId = injuryMatch[1];
+        const body = await readJsonBody();
+        if (!body.classification) { sendJson(400, { error: 'Field "classification" required' }); return; }
+        const updatedDoc = node.recordInjury(patientId, body.location || 'General Trauma', body.classification);
+        sendJson(200, updatedDoc);
+        return;
+      }
+
+      // GET /api/v1/patients/:id — Single patient detail
+      const singlePatientMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)$/);
+      if (singlePatientMatch && req.method === 'GET') {
+        const patientId = singlePatientMatch[1];
+        const doc = node.db.getPatientDocument(patientId);
+        if (!doc) { sendJson(404, { error: `Patient ${patientId} not found` }); return; }
+        const auditTrail = node.db.getAuditTrail(patientId);
+        sendJson(200, { doc, auditTrail });
         return;
       }
 
@@ -149,6 +179,39 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         const body = await readJsonBody();
         const result = node.resolveDivergenceFlag(patientId, body.flagId, body.note || 'Clinician confirmed');
         sendJson(200, result);
+        return;
+      }
+
+      const snapshotMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/snapshot$/);
+      if (snapshotMatch && req.method === 'POST') {
+        const patientId = snapshotMatch[1];
+        const body = await readJsonBody();
+        const result = node.attachEmergencySnapshot(patientId, body);
+        sendJson(200, result);
+        return;
+      }
+
+      if (pathname === '/api/v1/vault/sample' && req.method === 'GET') {
+        sendJson(200, {
+          profile: {
+            citizenId: 'CITIZEN-NP-94021',
+            fullName: 'Aarav Sharma',
+            bloodGroup: 'O+',
+            allergies: ['Penicillin', 'Sulfa'],
+            chronicConditions: ['Type 2 Diabetes', 'Asthma'],
+            currentMedications: [{ name: 'Metformin', dosage: '500mg' }, { name: 'Albuterol Inhaler' }],
+            emergencyContacts: [{ name: 'Maya Sharma', relation: 'Spouse', phone: '+977-9801234567' }],
+            updatedAt: Date.now()
+          },
+          snapshot: {
+            bloodGroup: 'O+',
+            allergies: ['Penicillin', 'Sulfa'],
+            criticalConditions: ['Type 2 Diabetes', 'Asthma'],
+            currentMedicationsSummary: ['Metformin 500mg', 'Albuterol Inhaler'],
+            emergencyContacts: [{ name: 'Maya Sharma', relation: 'Spouse', phone: '+977-9801234567' }],
+            extractedAt: Date.now()
+          }
+        });
         return;
       }
 

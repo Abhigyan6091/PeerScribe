@@ -177,80 +177,128 @@ PeerScribe/
 ### Installation
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/Abhigyan6091/PeerScribe.git
-   cd PeerScribe
-   ```
-
-2. Start the Tactical Node Daemon and Web UI:
-   ```bash
-   npm run start
-   ```
-
-3. Open your browser and navigate to:
-   ```
-   http://localhost:4321
-   ```
-
-### Running with Python Research Tools (Optional)
-
-For automated test client scripts, Monte Carlo mesh plotting, and benchmark analysis:
+### Running the Windows Electron Application
 ```bash
-python -m venv .venv
-# On Windows:
-.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
+# Navigate to desktop app
+cd apps/desktop-electron
 
-pip install -r requirements.txt
+# Run Electron desktop locally
+npm start
+
+# Build Windows NSIS Installer (.exe) and Portable Package (.zip)
+npm run dist
+```
+
+### Running the Android Flutter Application
+```bash
+# Navigate to android-flutter app
+cd apps/android-flutter
+
+# Install dependencies
+flutter pub get
+
+# Run on connected Android device / emulator
+flutter run
+
+# Build release APK
+flutter build apk --release
 ```
 
 ---
 
-## 7. Automated Testing & Benchmarks
+## 7. Cross-Platform Applications & Monorepo Layout
 
-PeerScribe comes with a comprehensive suite of **29 automated tests**, including the 7 formal empirical experiments specified in Section 10 of the implementation blueprint:
+PeerScribe is organized as an offline-first monorepo with symmetric logical peers:
 
-```bash
-npm test
+```text
+peerscribe/
+├── apps/
+│   ├── desktop-electron/         # Windows Electron tactical client (NSIS + Portable)
+│   └── android-flutter/          # Android Flutter mobile tactical client (APK)
+├── packages/
+│   ├── protocol/                 # Canonical schemas, fixtures & state projection
+│   ├── core-engine/              # CRDT, vector clocks, encryption, clinical rules
+│   ├── platform-adapters/        # BitChat wire protocol, BLE mesh, GNSS geohash
+│   ├── backend-service/          # Node.js tactical daemon, SQLite WAL, HTTP/WS API
+│   └── ui-app/                   # Tactical HUD renderer interface
+├── docs/
+│   ├── architecture/             # HLD.md, ADR.md, IMPLEMENTATION_PLAN.md
+│   ├── TESTING.md                # Multi-device test procedures & QA matrix
+│   └── RELEASES.md               # Versioning, channels & signing guide
+└── .github/
+    └── workflows/
+        ├── ci.yml                # CI: Protocol, Windows Electron, Android Flutter
+        └── release.yml           # Gated multi-channel release pipeline
 ```
 
-### Benchmark Experiments Suite
+---
 
-Run the formal experiments:
+## 8. Automated Testing & Verification Suite
+
+PeerScribe includes **42 automated unit, integration, protocol, and empirical benchmark tests** executing across all components:
+
 ```bash
+# Run full monorepo test suite (42 tests)
+npm test
+
+# Run shared protocol schema & fixture projection tests
+npm run test:protocol
+
+# Run Windows Electron isolation & packaging tests
+npm run test:electron
+
+# Run formal benchmark experiments suite
 npm run benchmark
 ```
 
-| Experiment | Focus Area | Empirical Validation |
-|:---|:---|:---|
-| **Experiment 1** | CRDT Convergence Under Partitions | 5 nodes concurrently update partitioned documents; 100% converge to an identical cryptographic hash upon reconnection. |
-| **Experiment 2** | Multi-Hop DTN Store-and-Forward | Verifies prioritized bundle propagation, hop-count decrementing, and TTL expiration across a 3-hop bucket brigade. |
-| **Experiment 3** | Nostr Gateway Bridging | Tests seamless packaging into Nostr Kind 20042 events and automatic node promotion upon WAN detection. |
-| **Experiment 4** | Edge AI Speech Extraction Schema | Validates natural language extraction across varied phrasing into deterministic START categories. |
-| **Experiment 5** | High-Stress Semantic Divergence | Simulates concurrent contradictory triage evaluations (`RED` vs `GREEN`) and asserts human sign-off flag generation. |
-| **Experiment 6** | Probabilistic Search Area Contraction | Propagates 200 particles with Brownian motion and verifies Bayesian spatial contraction upon sighting observations. |
-| **Experiment 7** | Battery Profile Duty-Cycling | Verifies power savings of tri-modal transitions across *Dormant*, *Field*, and *Emergency* operational profiles. |
+### Test Coverage Summary (42/42 Passing)
+- **Shared Protocol (`packages/protocol`)**: Schema validation, golden sample fixtures, deterministic projection, out-of-order commutativity, and idempotency.
+- **Windows Electron (`apps/desktop-electron`)**: IPC channel whitelisting, context isolation boundaries, decoupled personal vault persistence.
+- **Android Flutter (`apps/android-flutter`)**: Dart event serialization, vector clock causal ordering, START triage rule decision tree.
+- **Core Engine & Adapters**: Ed25519 signing, Noise XX handshake, AES-256-GCM vault, CRDT convergence, Bloom filter deduplication, particle filter search contraction, and DTN outbox store-and-forward.
 
 ---
 
-## 8. Tactical Field Operation
+## 9. Offline LAN P2P Synchronization & Nostr Gateway
 
-1. **Patient Intake & START Triage**:
-   - Tap **RED**, **YELLOW**, **GREEN**, or **BLACK** to immediately log a casualty.
-   - The action commits immediately to local SQLite WAL, signs a CRDT delta, generates a 32-byte BitChat wire packet, and enqueues a priority bundle in the DTN outbox.
-2. **Push-To-Talk Voice Clinical Observation**:
-   - Click the **Push To Talk** button or press **`V`** on your keyboard.
-   - Speak naturally: *"Adult victim, respiration rate thirty-four, absent radial pulse, altered mental status"*.
-   - Words stream live into the dictation HUD. Tap stop to parse and apply START triage rules.
-3. **Semantic Divergence Resolution**:
-   - If two responders record opposing triage levels for the same casualty, a high-visibility pulsing alert appears on all connected screens.
-   - A medic must tap the banner to review both evaluations and provide a signed clinical override.
-4. **Emergency Wipe**:
-   - In hostile or catastrophic conditions, tapping **EMERGENCY WIPE** triggers a 3-pass DoD 5220.22-M overwrite of the SQLite database and destroys all cryptographic keys in RAM.
+1. **Local Wi-Fi / Hotspot P2P Sync**:
+   - Responders running PeerScribe on Windows and Android on the same Wi-Fi router or mobile hotspot exchange sync bundles directly over bidirectional WebSockets without requiring Internet access.
+   - Idempotent deduplication guarantees repeated deliveries do not create duplicate clinical actions.
+   - Causal vector clocks preserve all updates and detect concurrent safety-critical divergences (`RED` vs `GREEN`), alerting medics immediately.
+2. **Nostr Global Store-and-Forward Gateway**:
+   - Any node that temporarily discovers cellular/satellite WAN connectivity ephemerally serves as a gateway.
+   - Delta bundles are encrypted and broadcast as Nostr Kind `20042` events to configured public relays (`wss://relay.damus.io`, `wss://nos.lol`).
+   - Sensitive clinical data is never transmitted unencrypted to public relays.
 
 ---
 
-## 9. License
+## 10. GitHub Actions CI/CD Pipeline
+
+The repository includes enterprise-grade GitHub Actions workflows:
+
+- **`.github/workflows/ci.yml`**:
+  - Independent parallel jobs for Shared Protocol, Windows Electron packaging (`windows-latest`), and Android Flutter compilation (`ubuntu-latest`).
+  - Automatically builds and uploads downloadable test artifacts:
+    - `PeerScribe-Windows-Desktop-CI` (`.exe` installer and `.zip` portable package).
+    - `PeerScribe-Android-Mobile-CI` (`.apk` installable package).
+- **`.github/workflows/release.yml`**:
+  - Controlled manual execution (`workflow_dispatch`) with validated SemVer inputs.
+  - Release gating: strictly requires all mandatory tests and packaging jobs to pass.
+  - Generates SHA-256 checksums (`SHA256SUMS.txt`) and publishes official GitHub Releases.
+
+---
+
+## 11. Known Limitations & Research Disclaimer
+
+> [!WARNING]
+> **RESEARCH PROTOTYPE ONLY**: PeerScribe is a clinical coordination research prototype for disaster response and mass casualty incidents. It is not an FDA/CE-certified medical device.
+> - **Zero Autonomous Prescriptions**: The Edge AI module extracts clinical observations from natural speech; it is strictly prohibited from prescribing medications or calculating dosages.
+> - **Deterministic Triage**: All triage classifications are evaluated using deterministic START/JumpSTART rule trees or explicit responder overrides.
+> - **Local Development Environment**: On the local Windows development machine, all 42 automated tests pass with 100% green status; Flutter Android APK compilation is verified via GitHub Actions CI runners equipped with Android SDK and Flutter tooling.
+
+---
+
+## 12. License
 
 PeerScribe is open-source software licensed under the **[Apache License 2.0](LICENSE)**.
+

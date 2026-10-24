@@ -1,0 +1,67 @@
+/* ==========================================================================
+   PeerScribe Tactical High-Stress Design Tokens
+   Fitts's Law Compliant (64px+ targets for gloved/trembling hands)
+   WCAG AAA Ultra-High Contrast for blinding glare and smoke conditions
+   ========================================================================== */
+
+:root {
+  /* Ergonomic Touch Dimensions */
+  --min-touch-target: 64px;
+  --touch-target-large: 76px;
+  --touch-target-massive: 92px;
+  --border-radius-tactical: 8px;
+
+  /* Tactical Color Palette (High-contrast discrimination) */
+  --bg-primary: #090A0D;
+  --bg-surface: #14161C;
+  --bg-surface-elevated: #20232C;
+  --text-primary: #FFFFFF;
+  --text-secondary: #B0B5C4;
+  --text-muted: #6B7285;
+
+  /* Disaster Triage Colors */
+  --triage-red: #FF1A1A;
+  --triage-red-bg: #380808;
+  --triage-yellow: #FFB800;
+  --triage-yellow-bg: #382800;
+  --triage-green: #00E676;
+  --triage-green-bg: #00361C;
+  --triage-black: #505664;
+  --triage-black-bg: #1B1E24;
+
+  /* Level 2 Semantic Divergence Warning */
+  --divergence-alert: #FF0055;
+  --divergence-alert-bg: #400015;
+
+  /* Operational Status Accents */
+  --mode-dormant: #4A5568;
+  --mode-field: #3182CE;
+  --mode-emergency: #E53E3E;
+  --mesh-active: #00F5D4;
+
+  /* Borders & Shadows */
+  --border-thick: 2px solid rgba(255, 255, 255, 0.15);
+  --border-active: 3px solid #FFFFFF;
+  --shadow-tactical: 0 4px 20px rgba(0, 0, 0, 0.6);
+
+  /* Typography */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-weight-heavy: 800;
+  --font-weight-bold: 700;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  overflow-x: hidden;
+  min-height: 100vh;
+}
