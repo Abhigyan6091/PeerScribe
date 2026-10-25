@@ -43,6 +43,10 @@ import {
   createNostrMeshEvent,
   decryptNostrMeshEvent,
   NostrGatewayService,
+  deriveNostrPublicKey,
+  signBip340,
+  verifyBip340,
+  validateNostrEvent,
   extractStructuredObservation,
   extractAndEvaluateTriage,
   MobilityParticleFilter
@@ -490,5 +494,35 @@ test('Probabilistic Location: Particle filter mobility propagation and sighting 
   const contractedEstimates = filter.estimateSearchContours();
   // Search area contracts significantly around the sighting point
   assert.ok(contractedEstimates.radius90PercentMeters < expandedEstimates.radius90PercentMeters);
+});
+
+test('BitChat Nostr: Standards-compliant BIP-340 Schnorr signatures & inbound event validation', () => {
+  const privKey = 'e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35';
+  const pubKey = deriveNostrPublicKey(privKey);
+  assert.equal(pubKey.length, 64, 'Derived public key must be 32 bytes (64 hex characters)');
+
+  const messageHash = 'a'.repeat(64);
+  const sig = signBip340(privKey, messageHash);
+  assert.equal(sig.length, 128, 'BIP-340 Schnorr signature must be 64 bytes (128 hex characters)');
+
+  // Verify valid signature
+  const isValid = verifyBip340(pubKey, messageHash, sig);
+  assert.equal(isValid, true, 'Valid BIP-340 signature must verify successfully');
+
+  // Verify tampered message is rejected
+  const tamperedMsg = 'b'.repeat(64);
+  const isTamperedValid = verifyBip340(pubKey, tamperedMsg, sig);
+  assert.equal(isTamperedValid, false, 'Tampered message must fail signature verification');
+
+  // Verify tampered signature is rejected
+  const tamperedSig = sig.slice(0, 126) + (sig.endsWith('0') ? '1' : '0');
+  const isTamperedSigValid = verifyBip340(pubKey, messageHash, tamperedSig);
+  assert.equal(isTamperedSigValid, false, 'Tampered signature must fail verification');
+
+  // Test createNostrMeshEvent produces a valid verifiable event
+  const sharedSecret = Buffer.alloc(32, 0x33);
+  const event = createNostrMeshEvent('OP-TEST-77', 'u15ek200', Buffer.from('TEST_DATA'), sharedSecret, privKey);
+  const validation = validateNostrEvent(event);
+  assert.equal(validation.valid, true, 'createNostrMeshEvent must produce an authenticated and valid Nostr event');
 });
 

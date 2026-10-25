@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import 'package:peerscribe_mobile/core/protocol/event_model.dart';
 import 'package:peerscribe_mobile/core/storage/database_helper.dart';
 import 'package:peerscribe_mobile/core/sync/sync_manager.dart';
+import 'package:peerscribe_mobile/core/sync/lan_sync_service.dart';
 import 'package:peerscribe_mobile/core/sync/delta_update_manager.dart';
 import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
 import 'theme.dart';
@@ -29,6 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    LanSyncService().startServer();
     _refreshState();
   }
 
@@ -101,15 +103,110 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final bundle = await _sync.createOutboxBundle(localNodeId: 'node_mobile_flutter');
-    final result = await _sync.ingestBundle(bundle);
-    await _refreshState();
+    final hostController = TextEditingController(text: '10.0.2.2:4323');
+    bool isSyncing = false;
+    String? syncStatusMessage;
+    bool? syncSuccess;
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('LAN Sync Complete: ${result['inserted_events']} new events synced')),
-      );
-    }
+    await showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: TacticalTheme.surface,
+              title: Row(
+                children: const [
+                  Icon(Icons.wifi_tethering, color: TacticalTheme.primary),
+                  SizedBox(width: 8),
+                  Text('TACTICAL LAN SYNC', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Local Mesh Listener: Port ${LanSyncService().port}',
+                      style: const TextStyle(color: TacticalTheme.primary, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Pairing Token: PEERSCRIBE-TACTICAL-MESH-2026',
+                      style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: hostController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Peer Address (Host:Port)',
+                        hintText: 'e.g. 192.168.1.15:4323 or 10.0.2.2:4323',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (isSyncing) ...[
+                      const SizedBox(height: 16),
+                      const Center(child: CircularProgressIndicator()),
+                    ],
+                    if (syncStatusMessage != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: (syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed),
+                        ),
+                        child: Text(
+                          syncStatusMessage!,
+                          style: TextStyle(
+                            color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSyncing ? null : () => Navigator.pop(dialogCtx),
+                  child: const Text('CLOSE', style: TextStyle(color: TacticalTheme.textMuted)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: TacticalTheme.primary, foregroundColor: Colors.black),
+                  onPressed: isSyncing ? null : () async {
+                    setDialogState(() {
+                      isSyncing = true;
+                      syncStatusMessage = 'Connecting to peer at ${hostController.text.trim()}...';
+                      syncSuccess = null;
+                    });
+
+                    final result = await LanSyncService().syncWithPeer(hostController.text.trim());
+                    await _refreshState();
+
+                    setDialogState(() {
+                      isSyncing = false;
+                      syncSuccess = result.success;
+                      if (result.success) {
+                        syncStatusMessage = 'Sync Succeeded: ${result.eventsSent} sent, ${result.eventsReceived} received, ${result.divergencesFlagged} divergences flagged.';
+                      } else {
+                        syncStatusMessage = 'Sync Failed: ${result.errorMessage}';
+                      }
+                    });
+                  },
+                  child: const Text('SYNC NOW', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    await _refreshState();
   }
 
   Widget _buildModeBadge() {

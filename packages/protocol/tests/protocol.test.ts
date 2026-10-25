@@ -139,4 +139,111 @@ describe('PeerScribe Shared Protocol Specification', () => {
     assert.deepStrictEqual(projDuplicated?.patient_id, original?.patient_id);
     assert.deepStrictEqual(projDuplicated?.active_triage, original?.active_triage);
   });
+
+  it('correctly manages concurrent clinical divergence between RED and GREEN without silent overwrite', () => {
+    const basePatientEvent: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_div_pt_01',
+      operation_id: 'OP_DIV_TEST',
+      entity_id: 'pt_divergent_01',
+      event_type: 'PATIENT_CREATED',
+      actor_id: 'node_base',
+      actor_sequence: 1,
+      lamport_timestamp: 1,
+      occurred_at_utc: '2026-10-25T14:00:00.000Z',
+      payload: { ephemeral_id: 'TAG-DIV-01' }
+    };
+
+    // Replica A assesses RED while disconnected
+    const replicaAEvent: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_triage_red_replica_a',
+      operation_id: 'OP_DIV_TEST',
+      entity_id: 'pt_divergent_01',
+      event_type: 'TRIAGE_STATUS_CHANGED',
+      actor_id: 'node_medic_A',
+      actor_sequence: 1,
+      lamport_timestamp: 2,
+      occurred_at_utc: '2026-10-25T14:05:00.000Z',
+      payload: { triage_category: 'RED', rationale: 'Severe respiratory compromise' }
+    };
+
+    // Replica B assesses GREEN while disconnected
+    const replicaBEvent: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_triage_green_replica_b',
+      operation_id: 'OP_DIV_TEST',
+      entity_id: 'pt_divergent_01',
+      event_type: 'TRIAGE_STATUS_CHANGED',
+      actor_id: 'node_medic_B',
+      actor_sequence: 1,
+      lamport_timestamp: 2,
+      occurred_at_utc: '2026-10-25T14:06:00.000Z',
+      payload: { triage_category: 'GREEN', rationale: 'Walking wounded, ambulatory' }
+    };
+
+    // 1. After synchronization, both observations are merged into the event log
+    const mergedEvents = [basePatientEvent, replicaAEvent, replicaBEvent];
+    const projUnresolved = projectPatientState(mergedEvents);
+
+    assert.ok(projUnresolved !== null);
+    // Both observations MUST remain in history (no silent discard)
+    assert.strictEqual(projUnresolved.triage_history.length, 2);
+    assert.ok(projUnresolved.triage_history.some(t => t.category === 'RED'));
+    assert.ok(projUnresolved.triage_history.some(t => t.category === 'GREEN'));
+
+    // State 1: DETECTED
+    assert.strictEqual(projUnresolved.divergence_state, 'DETECTED');
+    // Display policy: MUST NOT imply finalized decision (active_triage must not be finalized)
+    assert.strictEqual(projUnresolved.active_triage, 'UNASSESSED');
+    assert.ok(projUnresolved.triage_display_label.includes('UNRESOLVED DIVERGENCE'));
+    assert.ok(projUnresolved.divergent_categories.includes('RED'));
+    assert.ok(projUnresolved.divergent_categories.includes('GREEN'));
+
+    // State 2: ACKNOWLEDGED (Clinician acknowledges awareness of conflict)
+    const ackEvent: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_ack_div_01',
+      operation_id: 'OP_DIV_TEST',
+      entity_id: 'pt_divergent_01',
+      event_type: 'DIVERGENCE_ACKNOWLEDGED',
+      actor_id: 'node_medic_supervisor',
+      actor_sequence: 1,
+      lamport_timestamp: 3,
+      occurred_at_utc: '2026-10-25T14:10:00.000Z',
+      payload: {
+        flag_id: 'flag_red_vs_green',
+        conflict_type: 'CONCURRENT_TRIAGE_CONFLICT',
+        severity: 'CRITICAL',
+        reason: 'Medic A tagged RED and Medic B tagged GREEN while disconnected'
+      }
+    };
+    const projAck = projectPatientState([...mergedEvents, ackEvent]);
+    assert.strictEqual(projAck?.divergence_state, 'ACKNOWLEDGED');
+    assert.strictEqual(projAck?.active_triage, 'UNASSESSED');
+
+    // State 3: RESOLVED (Authorized clinician performs assessment and signs off)
+    const resolveEvent: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_resolve_div_01',
+      operation_id: 'OP_DIV_TEST',
+      entity_id: 'pt_divergent_01',
+      event_type: 'DIVERGENCE_RESOLVED',
+      actor_id: 'node_trauma_lead',
+      actor_sequence: 2,
+      lamport_timestamp: 4,
+      occurred_at_utc: '2026-10-25T14:15:00.000Z',
+      payload: {
+        flag_id: 'flag_red_vs_green',
+        resolved_category: 'RED',
+        clinician_signoff_note: 'Patient decompensated with tension pneumothorax. Confirmed RED.'
+      }
+    };
+    const projResolved = projectPatientState([...mergedEvents, ackEvent, resolveEvent]);
+    assert.strictEqual(projResolved?.divergence_state, 'RESOLVED');
+    assert.strictEqual(projResolved?.active_triage, 'RED');
+    assert.strictEqual(projResolved?.triage_display_label, 'RED');
+    assert.strictEqual(projResolved?.divergence_flags[0].resolved, true);
+    assert.strictEqual(projResolved?.divergence_flags[0].resolved_by, 'node_trauma_lead');
+  });
 });

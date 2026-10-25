@@ -5,9 +5,13 @@ class ProjectedPatient {
   final String operationId;
   final String ephemeralId;
   String activeTriage;
+  String triageDisplayLabel;
+  String divergenceState; // 'NONE' | 'DETECTED' | 'ACKNOWLEDGED' | 'RESOLVED'
+  List<String> divergentCategories;
   final String createdAtUtc;
   String updatedAtUtc;
   final Map<String, int> vectorClock;
+  final List<Map<String, dynamic>> triageHistory;
   final List<Map<String, dynamic>> vitals;
   final List<Map<String, dynamic>> injuries;
   final List<Map<String, dynamic>> medications;
@@ -20,9 +24,13 @@ class ProjectedPatient {
     required this.operationId,
     required this.ephemeralId,
     this.activeTriage = 'UNASSESSED',
+    this.triageDisplayLabel = 'UNASSESSED',
+    this.divergenceState = 'NONE',
+    this.divergentCategories = const [],
     required this.createdAtUtc,
     required this.updatedAtUtc,
     required this.vectorClock,
+    required this.triageHistory,
     required this.vitals,
     required this.injuries,
     required this.medications,
@@ -55,9 +63,13 @@ class ProjectedPatient {
       operationId: creation.operationId,
       ephemeralId: creation.payload['ephemeral_id']?.toString() ?? 'TAG-UNKNOWN',
       activeTriage: 'UNASSESSED',
+      triageDisplayLabel: 'UNASSESSED',
+      divergenceState: 'NONE',
+      divergentCategories: [],
       createdAtUtc: creation.occurredAtUtc,
       updatedAtUtc: creation.occurredAtUtc,
       vectorClock: {},
+      triageHistory: [],
       vitals: [],
       injuries: [],
       medications: [],
@@ -65,6 +77,10 @@ class ProjectedPatient {
       notes: [],
       divergenceFlags: [],
     );
+
+    String? resolvedCategory;
+    bool hasResolvedEvent = false;
+    bool hasAcknowledgedEvent = false;
 
     for (final evt in sorted) {
       patient.updatedAtUtc = evt.occurredAtUtc;
@@ -110,9 +126,18 @@ class ProjectedPatient {
           break;
         case 'TRIAGE_STATUS_CHANGED':
           final cat = evt.payload['triage_category']?.toString();
-          if (cat != null) patient.activeTriage = cat;
+          if (cat != null) {
+            patient.triageHistory.add({
+              'event_id': evt.eventId,
+              'actor_id': evt.actorId,
+              'category': cat,
+              'lamport_timestamp': evt.lamportTimestamp,
+              'occurred_at_utc': evt.occurredAtUtc,
+            });
+          }
           break;
         case 'DIVERGENCE_ACKNOWLEDGED':
+          hasAcknowledgedEvent = true;
           patient.divergenceFlags.add({
             'flag_id': evt.payload['flag_id'] ?? evt.eventId,
             'resolved': false,
@@ -120,8 +145,8 @@ class ProjectedPatient {
           });
           break;
         case 'DIVERGENCE_RESOLVED':
-          final resCat = evt.payload['resolved_category']?.toString();
-          if (resCat != null) patient.activeTriage = resCat;
+          hasResolvedEvent = true;
+          resolvedCategory = evt.payload['resolved_category']?.toString();
           for (final f in patient.divergenceFlags) {
             if (f['flag_id'] == evt.payload['flag_id'] || evt.payload['flag_id'] == null) {
               f['resolved'] = true;
@@ -131,6 +156,30 @@ class ProjectedPatient {
           }
           break;
       }
+    }
+
+    // Evaluate Clinical Divergence State Machine
+    final distinctTriageCategories = patient.triageHistory
+        .map((t) => t['category'] as String?)
+        .whereType<String>()
+        .toSet()
+        .toList();
+
+    if (hasResolvedEvent && resolvedCategory != null) {
+      patient.divergenceState = 'RESOLVED';
+      patient.activeTriage = resolvedCategory;
+      patient.triageDisplayLabel = resolvedCategory;
+    } else if (distinctTriageCategories.length > 1) {
+      // Concurrent un-reconciled triage assessments detected
+      patient.divergenceState = hasAcknowledgedEvent ? 'ACKNOWLEDGED' : 'DETECTED';
+      patient.divergentCategories = distinctTriageCategories;
+      patient.triageDisplayLabel = 'UNRESOLVED DIVERGENCE (${distinctTriageCategories.join(" vs ")})';
+      // UI policy: Do NOT finalize to an arbitrary single category when unresolved
+      patient.activeTriage = 'UNASSESSED';
+    } else if (distinctTriageCategories.length == 1) {
+      patient.divergenceState = 'NONE';
+      patient.activeTriage = distinctTriageCategories.first;
+      patient.triageDisplayLabel = patient.activeTriage;
     }
 
     return patient;

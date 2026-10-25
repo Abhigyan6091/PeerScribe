@@ -26,8 +26,11 @@ const ALLOWED_INVOKE_CHANNELS = [
   'vault:save-profile',
   'vault:disclose-snapshot',
   'sync:trigger-lan',
+  'sync:get-lan-info',
+  'sync:pair-peer',
   'sync:get-peers',
-  'sync:get-outbox'
+  'sync:get-outbox',
+  'vault:load-demo'
 ];
 
 const ALLOWED_RECEIVE_CHANNELS = [

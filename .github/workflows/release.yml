@@ -60,7 +60,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Run Full Monorepo Test Suite
         run: npm test
@@ -80,7 +80,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
       - name: Package Windows Electron Application
         shell: bash
@@ -94,10 +94,23 @@ jobs:
         run: |
           mkdir -p release-windows
           VER="${{ needs.validate-and-test.outputs.release_version }}"
-          cp apps/desktop-electron/dist/*.exe "release-windows/PeerScribe-Windows-Setup-v${VER}.exe" || echo "Setup exe ready"
-          cp apps/desktop-electron/dist/*.blockmap release-windows/ 2>/dev/null || echo "Blockmaps ready"
-          cp apps/desktop-electron/dist/*.yml release-windows/ 2>/dev/null || echo "Update manifests ready"
-          cp apps/desktop-electron/dist/*.zip "release-windows/PeerScribe-Windows-Portable-v${VER}.zip" || echo "Portable zip ready"
+          SETUP_EXE=$(find apps/desktop-electron/dist/ -name "*.exe" | head -n 1)
+          if [ -z "$SETUP_EXE" ] || [ ! -f "$SETUP_EXE" ]; then
+            echo "::error::Official Windows installer (.exe) was not produced. Release gate failed."
+            exit 1
+          fi
+          cp "$SETUP_EXE" "release-windows/PeerScribe-Windows-Setup-v${VER}.exe"
+
+          PORTABLE_ZIP=$(find apps/desktop-electron/dist/ -name "*.zip" | head -n 1)
+          if [ -z "$PORTABLE_ZIP" ] || [ ! -f "$PORTABLE_ZIP" ]; then
+            echo "::error::Official Windows portable (.zip) was not produced. Release gate failed."
+            exit 1
+          fi
+          cp "$PORTABLE_ZIP" "release-windows/PeerScribe-Windows-Portable-v${VER}.zip"
+
+          cp apps/desktop-electron/dist/*.blockmap release-windows/ 2>/dev/null || true
+          cp apps/desktop-electron/dist/*.yml release-windows/ 2>/dev/null || true
+          ls -la release-windows/
 
       - name: Upload Windows Binaries Artifact
         uses: actions/upload-artifact@v4
@@ -132,17 +145,22 @@ jobs:
           flutter pub get
           flutter test
 
-      - name: Build Android APK
+      - name: Build Android Release APK
         working-directory: apps/android-flutter
         run: |
-          flutter build apk --release || flutter build apk --debug
+          flutter build apk --release
 
       - name: Stage Android Release APK
         run: |
           mkdir -p release-android
           VER="${{ needs.validate-and-test.outputs.release_version }}"
-          APK_FILE=$(find apps/android-flutter/build/app/outputs/flutter-apk/ -name "*.apk" | head -n 1)
-          cp "$APK_FILE" "release-android/PeerScribe-Android-v${VER}.apk"
+          RELEASE_APK="apps/android-flutter/build/app/outputs/flutter-apk/app-release.apk"
+          if [ ! -f "$RELEASE_APK" ]; then
+            echo "::error::Release APK ($RELEASE_APK) does not exist. Fallback to debug APK is strictly forbidden in official releases."
+            exit 1
+          fi
+          cp "$RELEASE_APK" "release-android/PeerScribe-Android-v${VER}.apk"
+          ls -la release-android/
 
       - name: Upload Android Binary Artifact
         uses: actions/upload-artifact@v4
@@ -170,9 +188,13 @@ jobs:
           name: android-binaries
           path: release-assets
 
-      - name: Generate SHA-256 Checksums
+      - name: Verify Release Assets & Generate SHA-256 Checksums
         working-directory: release-assets
         run: |
+          VER="${{ needs.validate-and-test.outputs.release_version }}"
+          test -f "PeerScribe-Windows-Setup-v${VER}.exe" || { echo "::error::Missing Windows installer in release assets"; exit 1; }
+          test -f "PeerScribe-Windows-Portable-v${VER}.zip" || { echo "::error::Missing Windows portable zip in release assets"; exit 1; }
+          test -f "PeerScribe-Android-v${VER}.apk" || { echo "::error::Missing Android APK in release assets"; exit 1; }
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 

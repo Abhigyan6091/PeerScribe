@@ -77,4 +77,92 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
     fs.unlinkSync(vaultFile);
     fs.rmdirSync(tempDir);
   });
+
+  it('validates bidirectional LAN sync and token authentication between peers', async () => {
+    const { LanSyncService, TACTICAL_PAIRING_SECRET } = require('../src/lan_sync.cjs');
+
+    const peerAEvents = [];
+    const peerAOutbox = [
+      {
+        schema_version: 1,
+        event_id: 'evt_from_node_A_001',
+        operation_id: 'OP_TEST',
+        entity_id: 'pt_100',
+        event_type: 'PATIENT_CREATED',
+        actor_id: 'node_A',
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: { ephemeral_id: 'TAG-A1' }
+      }
+    ];
+
+    const serviceA = new LanSyncService({
+      port: 4390,
+      nodeId: 'node_A',
+      getState: () => ({ eventsLog: peerAEvents, outboxQueue: peerAOutbox, activeOperation: { operation_id: 'OP_TEST' } }),
+      onEventsIngested: (events) => { peerAEvents.push(...events); return 0; },
+      onOutboxAcknowledged: (ids) => {
+        const idx = peerAOutbox.findIndex(e => ids.includes(e.event_id));
+        if (idx >= 0) peerAOutbox.splice(idx, 1);
+      }
+    });
+
+    const peerBEvents = [];
+    const peerBOutbox = [
+      {
+        schema_version: 1,
+        event_id: 'evt_from_node_B_001',
+        operation_id: 'OP_TEST',
+        entity_id: 'pt_200',
+        event_type: 'PATIENT_CREATED',
+        actor_id: 'node_B',
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: { ephemeral_id: 'TAG-B1' }
+      }
+    ];
+
+    const serviceB = new LanSyncService({
+      port: 4391,
+      nodeId: 'node_B',
+      getState: () => ({ eventsLog: peerBEvents, outboxQueue: peerBOutbox, activeOperation: { operation_id: 'OP_TEST' } }),
+      onEventsIngested: (events) => { peerBEvents.push(...events); return 0; },
+      onOutboxAcknowledged: (ids) => {
+        const idx = peerBOutbox.findIndex(e => ids.includes(e.event_id));
+        if (idx >= 0) peerBOutbox.splice(idx, 1);
+      }
+    });
+
+    try {
+      await serviceA.startServer();
+      await serviceB.startServer();
+
+      // Node A synchronizes with Node B over real local HTTP connection
+      const syncResult = await serviceA.syncWithPeer('http://127.0.0.1:4391', TACTICAL_PAIRING_SECRET);
+
+      assert.strictEqual(syncResult.success, true);
+      assert.strictEqual(syncResult.eventsSent, 1);
+      assert.strictEqual(syncResult.eventsReceived, 1);
+
+      // Verify Node B received Node A's event
+      assert.ok(peerBEvents.some(e => e.event_id === 'evt_from_node_A_001'), 'Node B must have received Node A event');
+
+      // Verify Node A received Node B's event
+      assert.ok(peerAEvents.some(e => e.event_id === 'evt_from_node_B_001'), 'Node A must have received Node B event');
+
+      // Verify Node A's outbox was acknowledged and cleared
+      assert.strictEqual(peerAOutbox.length, 0, 'Outbox must be cleared upon successful peer exchange');
+
+      // Attempt sync with invalid token (must be rejected)
+      await assert.rejects(
+        () => serviceA.syncWithPeer('http://127.0.0.1:4391', 'INVALID_TOKEN'),
+        /Unauthorized/
+      );
+    } finally {
+      serviceA.stopServer();
+      serviceB.stopServer();
+    }
+  });
 });

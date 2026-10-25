@@ -42,14 +42,20 @@ export interface PeerScribeSyncBundle {
   bloom_filter_hex?: string;
 }
 
+export type DivergenceState = 'NONE' | 'DETECTED' | 'ACKNOWLEDGED' | 'RESOLVED';
+
 export interface ProjectedPatientState {
   patient_id: string;
   operation_id: string;
   ephemeral_id: string;
   active_triage: TriageCategory;
+  triage_display_label: string;
+  divergence_state: DivergenceState;
+  divergent_categories: TriageCategory[];
   created_at_utc: string;
   updated_at_utc: string;
   vector_clock: Record<string, number>;
+  triage_history: any[];
   vitals: any[];
   injuries: any[];
   medications: any[];
@@ -156,9 +162,13 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
     operation_id: creation.operation_id,
     ephemeral_id: creation.payload.ephemeral_id || 'UNKNOWN-00',
     active_triage: 'UNASSESSED',
+    triage_display_label: 'UNASSESSED',
+    divergence_state: 'NONE',
+    divergent_categories: [],
     created_at_utc: creation.occurred_at_utc,
     updated_at_utc: creation.occurred_at_utc,
     vector_clock: {},
+    triage_history: [],
     vitals: [],
     injuries: [],
     medications: [],
@@ -167,7 +177,9 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
     divergence_flags: []
   };
 
-  const triageSeverity: Record<string, number> = { RED: 4, YELLOW: 3, GREEN: 2, BLACK: 1, UNASSESSED: 0 };
+  let resolvedCategory: TriageCategory | null = null;
+  let hasResolvedEvent = false;
+  let hasAcknowledgedEvent = false;
 
   for (const evt of sorted) {
     state.updated_at_utc = evt.occurred_at_utc;
@@ -204,13 +216,21 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
         });
         break;
       case 'TRIAGE_STATUS_CHANGED':
-        state.active_triage = evt.payload.triage_category || state.active_triage;
+        state.triage_history.push({
+          event_id: evt.event_id,
+          actor_id: evt.actor_id,
+          category: evt.payload.triage_category,
+          lamport_timestamp: evt.lamport_timestamp,
+          occurred_at_utc: evt.occurred_at_utc
+        });
         break;
       case 'DIVERGENCE_ACKNOWLEDGED':
+        hasAcknowledgedEvent = true;
         state.divergence_flags.push({ flag_id: evt.payload.flag_id || evt.event_id, resolved: false, ...evt.payload });
         break;
       case 'DIVERGENCE_RESOLVED':
-        state.active_triage = evt.payload.resolved_category || state.active_triage;
+        hasResolvedEvent = true;
+        resolvedCategory = evt.payload.resolved_category;
         state.divergence_flags.forEach(f => {
           if (f.flag_id === evt.payload.flag_id || !evt.payload.flag_id) {
             f.resolved = true;
@@ -220,6 +240,26 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
         });
         break;
     }
+  }
+
+  // Evaluate Clinical Triage and Divergence State Machine
+  const distinctTriageCategories = Array.from(new Set(state.triage_history.map(t => t.category).filter(Boolean)));
+
+  if (hasResolvedEvent && resolvedCategory) {
+    state.divergence_state = 'RESOLVED';
+    state.active_triage = resolvedCategory;
+    state.triage_display_label = resolvedCategory;
+  } else if (distinctTriageCategories.length > 1) {
+    // Concurrent un-reconciled triage assessments detected
+    state.divergence_state = hasAcknowledgedEvent ? 'ACKNOWLEDGED' : 'DETECTED';
+    state.divergent_categories = distinctTriageCategories as TriageCategory[];
+    state.triage_display_label = `UNRESOLVED DIVERGENCE (${distinctTriageCategories.join(' vs ')})`;
+    // UI policy: Do NOT finalize to an arbitrary single category when unresolved
+    state.active_triage = 'UNASSESSED';
+  } else if (distinctTriageCategories.length === 1) {
+    state.divergence_state = 'NONE';
+    state.active_triage = distinctTriageCategories[0] as TriageCategory;
+    state.triage_display_label = state.active_triage;
   }
 
   return state;

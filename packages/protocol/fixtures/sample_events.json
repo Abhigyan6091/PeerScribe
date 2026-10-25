@@ -102,8 +102,9 @@
       "allergies": [ "Penicillin", "Sulfa" ],
       "critical_conditions": [ "Type 2 Diabetes", "Asthma" ],
       "emergency_contacts": [
-        { "name": "Maya Sharma", "relation": "Spouse", "phone": "+977-9801234567" }
-      ]
+        { "name": "Synthetic Demo Contact", "relation": "Simulated", "phone": "+0-000-000-0000" }
+      ],
+      "is_synthetic_demo": true
     }
   },
   {

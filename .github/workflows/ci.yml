@@ -29,7 +29,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Monorepo Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Validate Shared Protocol Schemas & Golden Fixtures
         run: npm run test:protocol
@@ -55,7 +55,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Monorepo Dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run Electron Unit & Isolation Tests
         run: npm run test:electron
@@ -77,10 +77,22 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts-windows
-          cp apps/desktop-electron/dist/*.exe artifacts-windows/ || echo "Setup exe packaged"
-          cp apps/desktop-electron/dist/*.blockmap artifacts-windows/ || echo "Blockmaps packaged"
-          cp apps/desktop-electron/dist/*.zip artifacts-windows/ || echo "Portable zip packaged"
-          cp apps/desktop-electron/dist/*.yml artifacts-windows/ || echo "Update manifests packaged"
+          SETUP_EXE=$(find apps/desktop-electron/dist/ -name "*.exe" | head -n 1)
+          if [ -z "$SETUP_EXE" ] || [ ! -f "$SETUP_EXE" ]; then
+            echo "::error::Windows installer executable was not produced by electron-builder."
+            exit 1
+          fi
+          cp "$SETUP_EXE" artifacts-windows/
+
+          PORTABLE_ZIP=$(find apps/desktop-electron/dist/ -name "*.zip" | head -n 1)
+          if [ -z "$PORTABLE_ZIP" ] || [ ! -f "$PORTABLE_ZIP" ]; then
+            echo "::error::Windows portable archive was not produced by electron-builder."
+            exit 1
+          fi
+          cp "$PORTABLE_ZIP" artifacts-windows/
+
+          cp apps/desktop-electron/dist/*.blockmap artifacts-windows/ 2>/dev/null || true
+          cp apps/desktop-electron/dist/*.yml artifacts-windows/ 2>/dev/null || true
           ls -la artifacts-windows/
 
       - name: Upload Windows Desktop Installer & Portable Package
