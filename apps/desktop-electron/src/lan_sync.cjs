@@ -405,6 +405,7 @@ class LanSyncService {
                 operation_id: state.activeOperation?.operation_id || 'OP_TACTICAL',
                 origin_node_id: this.nodeId,
                 priority: 'CLINICAL_DELTA',
+                vector_clock: {},
                 created_at_utc: new Date().toISOString(),
                 events: serverOutbox
               };

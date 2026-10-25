@@ -52,8 +52,10 @@ class PeerScribeSyncBundle {
       hopCount: map['hop_count'] as int? ?? 0,
       maxHops: map['max_hops'] as int? ?? 15,
       createdAtUtc: map['created_at_utc'] as String,
-      vectorClock: Map<String, int>.from(map['vector_clock'] as Map),
-      events: (map['events'] as List)
+      vectorClock: map['vector_clock'] != null
+          ? Map<String, int>.from(map['vector_clock'] as Map)
+          : <String, int>{},
+      events: (map['events'] as List? ?? [])
           .map((e) => PeerScribeEvent.fromMap(e as Map<String, dynamic>))
           .toList(),
     );

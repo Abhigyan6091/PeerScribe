@@ -161,8 +161,8 @@ jobs:
         run: |
           set -o pipefail
           if ! flutter test --reporter expanded 2>&1 | tee flutter_test.log; then
-            echo "::error title=Flutter Test Failed::$(tail -n 25 flutter_test.log | tr '\r\n' '  ')"
-            tail -n 60 flutter_test.log
+            echo "::error title=Flutter Test Failed::$(grep -E 'ERROR|FAIL|Expected:|EXCEPTION|TypeError' flutter_test.log | head -n 10 | tr '\r\n' '  ')"
+            grep -C 5 -E 'ERROR|FAIL|Expected:|EXCEPTION|TypeError' flutter_test.log || tail -n 80 flutter_test.log
             exit 1
           fi
 
