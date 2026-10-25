@@ -132,7 +132,7 @@ jobs:
 
       - name: Analyze Flutter Source Code
         working-directory: apps/android-flutter
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+        run: flutter analyze --no-fatal-infos
 
       - name: Run Flutter Unit & START Triage Tests
         working-directory: apps/android-flutter
