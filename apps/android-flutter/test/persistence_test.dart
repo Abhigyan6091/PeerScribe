@@ -377,17 +377,24 @@ void main() {
       );
 
       // Reading a corrupted profile MUST throw VaultSecurityException and transition to corrupted state
-      expect(
-        () async => await restartedVault.getProfile(),
-        throwsA(isA<VaultSecurityException>()),
-      );
+      bool threwCorrupted = false;
+      try {
+        await restartedVault.getProfile();
+      } on VaultSecurityException catch (e) {
+        threwCorrupted = true;
+        expect(e.state, equals(VaultState.corrupted));
+      }
+      expect(threwCorrupted, isTrue, reason: 'Reading corrupted profile must throw VaultSecurityException');
       expect(restartedVault.vaultState, equals(VaultState.corrupted));
 
       // Attempting to save/update an inaccessible/corrupted profile MUST be blocked
-      expect(
-        () async => await restartedVault.saveProfile({'blood_group': 'B+'}),
-        throwsA(isA<VaultSecurityException>()),
-      );
+      bool threwSaveBlocked = false;
+      try {
+        await restartedVault.saveProfile({'blood_group': 'B+'});
+      } on VaultSecurityException catch (_) {
+        threwSaveBlocked = true;
+      }
+      expect(threwSaveBlocked, isTrue, reason: 'Saving to corrupted vault must be blocked');
 
       // Verify original encrypted data was NOT overwritten on disk
       final preservedRow = await dbHelper.getEncryptedProfile();
@@ -415,18 +422,25 @@ void main() {
         isSyntheticDemo: false,
       );
 
-      expect(
-        () async => await vaultWithFailingRead.getProfile(),
-        throwsA(isA<VaultSecurityException>()),
-      );
+      bool threwInaccessible = false;
+      try {
+        await vaultWithFailingRead.getProfile();
+      } on VaultSecurityException catch (e) {
+        threwInaccessible = true;
+        expect(e.state, equals(VaultState.storageInaccessible));
+      }
+      expect(threwInaccessible, isTrue, reason: 'Read failure must throw VaultSecurityException');
       expect(vaultWithFailingRead.vaultState, equals(VaultState.storageInaccessible));
 
       // 2. Key storage write failure throws VaultKeyStorageException and never returns ephemeral key
       final throwingWriteStorage = _ThrowingKeyStorage(throwOnWrite: true);
-      expect(
-        () async => await throwingWriteStorage.getOrCreateMasterKey(),
-        throwsA(isA<VaultKeyStorageException>()),
-      );
+      bool threwWriteFailure = false;
+      try {
+        await throwingWriteStorage.getOrCreateMasterKey();
+      } on VaultKeyStorageException catch (_) {
+        threwWriteFailure = true;
+      }
+      expect(threwWriteFailure, isTrue, reason: 'Write failure must throw VaultKeyStorageException');
     });
 
     test('P0-B: Duplicate event insertion preserves single durable copy and handles transactions', () async {
