@@ -67,6 +67,14 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
   Future<void> _attachEmergencyVaultSnapshot() async {
     final vault = PersonalVaultStore();
     final snapshot = vault.generateEmergencySnapshot();
+    if (snapshot == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No emergency health profile configured or disclosed.')),
+        );
+      }
+      return;
+    }
     final db = DatabaseHelper();
     final allEvents = await db.getAllEvents();
     final op = await db.getActiveOperation();
