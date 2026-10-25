@@ -132,7 +132,13 @@ jobs:
 
       - name: Analyze Flutter Source Code
         working-directory: apps/android-flutter
-        run: dart analyze --no-fatal-warnings
+        run: |
+          dart analyze --no-fatal-warnings > analyze_output.txt 2>&1 || {
+            ERR=$(cat analyze_output.txt | head -n 30)
+            echo "::error title=Dart Analysis Error::$ERR"
+            cat analyze_output.txt
+            exit 1
+          }
 
       - name: Run Flutter Unit & START Triage Tests
         working-directory: apps/android-flutter
