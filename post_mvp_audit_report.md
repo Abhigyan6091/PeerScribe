@@ -85,12 +85,13 @@ All hardcoded credentials, custom XOR ciphers, and unauthenticated endpoints hav
 
 | Verification Level | Scope & Invariant | Status | Evidence |
 | :--- | :--- | :---: | :--- |
-| **Automated Tests** | Monorepo Protocol & Core Engine Tests (63 tests) | **PASSED** | `npm test` at root (protocol, CRDT, BitChat, START triage, noise, Nostr vectors, Bloom filter) |
-| **Automated Tests** | Electron Desktop Security & Replication (22 tests) | **PASSED** | `apps/desktop-electron/tests/desktop.test.cjs` (AES-256-GCM vault, pairing PIN, negative security tests, durable acks, 3-peer DTN) |
+| **Automated Tests** | Monorepo Protocol & Core Engine Tests (63 tests) | **PASSED** | `npm test` (protocol, CRDT, BitChat, START triage, Noise XX, Nostr BIP-340 vectors, Bloom filter); CI Job 1: 15s |
+| **Automated Tests** | Electron Desktop Security & Replication (22 tests) | **PASSED** | `apps/desktop-electron/tests/desktop.test.cjs` (AES-256-GCM vault, pairing PIN, 401/403/400/413/409 negative tests, durable acks, 3-peer DTN) |
 | **Automated Tests** | Android Flutter SQLite & Vault Tests | **PASSED** | `apps/android-flutter/test/persistence_test.dart` (AES-256-GCM roundtrip, tampering rejection, wrong key, restart, operational wipe isolation) |
-| **Cross-Language Integration** | Dart `LanSyncService` <-> Node `lan_sync.cjs` Localhost Sync | **PASSED** | `apps/android-flutter/test/cross_platform_lan_sync_test.dart` |
-| **Packaging & Build** | Windows Electron NSIS & Portable Package | **PASSED** | `npm run package:electron` produced `PeerScribe-Windows-v1.0.0-x64.exe` (87.3 MB) and `.zip` (111.2 MB) |
-| **Packaging & Build** | Android Flutter APK (Debug & Release Pipeline) | **PASSED** | `flutter build apk` verified in CI workflow `ci.yml` |
+| **Cross-Language Integration** | Dart `LanSyncService` <-> Node `lan_sync.cjs` Localhost Sync | **PASSED** | `apps/android-flutter/test/cross_platform_lan_sync_test.dart` (bidirectional sync, duplicate suppression, out-of-order delivery, concurrent RED vs GREEN divergence detection, client restart, offline retention) |
+| **CI / CD Pipeline** | GitHub Actions Workflow Run #45 (Commit `84fdc64`) | **ALL GREEN** | Run ID `40229987633`: Protocol & Core Engine (15s), Windows Build (2m 28s), Android Build & Tests (3m 51s) |
+| **Packaging & Build** | Windows Electron NSIS & Portable Package | **VERIFIED** | CI Artifact `PeerScribe-Windows-Desktop-CI` (189 MB); local packaging verified `PeerScribe-Windows-v1.0.0-x64.exe` (87.3 MB) and `.zip` (111.2 MB) |
+| **Packaging & Build** | Android Flutter APK (Release / Test Pipeline) | **VERIFIED** | CI Artifact `PeerScribe-Android-Mobile-CI` (83.3 MB); built via `flutter build apk` in CI |
 | **Physical Hardware** | Android Phone to Windows Laptop Over Physical Wi-Fi Hotspot | **CHECKLIST** | Field test checklist provided below (requires human execution with physical devices) |
 | **WAN Relays** | Live Nostr Relay Mesh Propagation | **EXPERIMENTAL** | Explicitly flagged experimental (`isExperimental = true`); core cryptography verified, relay transport pending |
 
