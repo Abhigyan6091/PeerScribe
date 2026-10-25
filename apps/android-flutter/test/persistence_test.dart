@@ -326,7 +326,7 @@ void main() {
 
       // 4. Tampered ciphertext rejection
       final originalCipher = rawDbRow['encrypted_payload'] as String;
-      final tamperedCipher = originalCipher.substring(0, originalCipher.length - 4) + 'AAAA';
+      final tamperedCipher = '${originalCipher.substring(0, originalCipher.length - 4)}AAAA';
       await dbHelper.saveEncryptedProfile(
         encryptedPayload: tamperedCipher,
         ivBase64: rawDbRow['iv_base64'] as String,

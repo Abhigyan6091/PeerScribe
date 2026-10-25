@@ -96,7 +96,7 @@ void main() {
     await dbHelper.initDatabase();
 
     dartService = LanSyncService();
-    dartService.setPairingPin(dartPairingPin, 300);
+    dartService.setPairingPin(dartPairingPin, ttlSeconds: 300);
     await dartService.startServer(port: dartPort);
 
     // Refresh pairing PIN on Node for each test run to account for single-use consumption
@@ -173,7 +173,7 @@ void main() {
       });
 
       // Refresh Dart pairing PIN
-      dartService.setPairingPin(dartPairingPin, 300);
+      dartService.setPairingPin(dartPairingPin, ttlSeconds: 300);
 
       // 2. Electron initiates synchronization targeting Dart service
       final syncCmdRes = await nodeHarness.sendCommand({
@@ -331,7 +331,7 @@ void main() {
       );
       final sessionId = pairRes['sessionId'] as String;
       final sessionToken = pairRes['sessionToken'] as String;
-      final duplicateNonce = 'nonce_replay_test_5544';
+      const duplicateNonce = 'nonce_replay_test_5544';
 
       final client = HttpClient();
       try {
@@ -450,7 +450,8 @@ void main() {
       dbHelperC.setDatabasePath(dbPathC);
       await dbHelperC.initDatabase();
 
-      final serviceC = LanSyncService(nodeId: 'peer_c_dart');
+      final serviceC = LanSyncService();
+      serviceC.setNodeId('peer_c_dart');
       try {
         final syncCToB = await serviceC.syncWithPeer(
           'http://127.0.0.1:$nodePort',
