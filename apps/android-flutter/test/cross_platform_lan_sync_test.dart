@@ -189,16 +189,37 @@ void main() {
     test('Duplicate events are suppressed and not inserted twice into SQLite', () async {
       if (nodeHarness == null) return;
 
-      // First sync ingested evt_node_to_dart_200. Sync again:
+      // 1. Ingest an event into Dart SQLite
+      final testEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_duplicate_test_300',
+        operationId: 'OP_CROSS_PLATFORM_TEST',
+        entityId: 'pt_cross_003',
+        eventType: 'PATIENT_CREATED',
+        actorId: 'node_electron_desktop',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: '2026-10-25T14:08:00.000Z',
+        payload: {'ephemeral_id': 'TAG-DUP-01'},
+      );
+      await dbHelper.insertEvent(testEvent);
+
+      // 2. Node also has this exact event in its outboxQueue
+      await nodeHarness!.sendCommand({
+        'action': 'ADD_EVENT',
+        'event': testEvent.toMap(),
+      });
+
+      // 3. Sync: Dart receives the duplicate event from Node
       final result = await dartService.syncWithPeer(
         'http://127.0.0.1:$nodePort',
         pairingPin: nodePairingPin,
       );
       expect(result.success, isTrue);
 
-      // Verify no duplicate row in SQLite
+      // 4. Verify duplicate event is NOT inserted twice into SQLite
       final allEvents = await dbHelper.getAllEvents();
-      final count = allEvents.where((e) => e.eventId == 'evt_node_to_dart_200').length;
+      final count = allEvents.where((e) => e.eventId == 'evt_duplicate_test_300').length;
       expect(count, equals(1), reason: 'Duplicate event must not be duplicated in database');
     });
 
