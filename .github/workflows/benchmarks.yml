@@ -25,32 +25,33 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: "Run Experiment 1: CRDT Partition Convergence Benchmark"
-        run: npm run test:bench:crdt --if-present
+        run: npm run test:bench:crdt
 
       - name: "Run Experiment 2: Multi-Hop DTN Store-and-Forward Benchmark"
-        run: npm run test:bench:dtn --if-present
+        run: npm run test:bench:dtn
 
       - name: "Run Experiment 3: Nostr Gateway Bridging Latency Benchmark"
-        run: npm run test:bench:nostr --if-present
+        run: npm run test:bench:nostr
 
       - name: "Run Experiment 4: Edge AI Extraction & Schema Validity Benchmark"
-        run: npm run test:bench:ai --if-present
+        run: npm run test:bench:ai
 
       - name: "Run Experiment 6: Probabilistic Search Area Contraction Benchmark"
-        run: npm run test:bench:search --if-present
+        run: npm run test:bench:search
 
-      - name: "Generate Research Evaluation Summary"
+      - name: "Execute and Record Empirical Benchmark Measurements"
         run: |
           mkdir -p benchmark-results
-          echo "### PeerScribe Research Benchmark Evaluation" > benchmark-results/SUMMARY.md
-          echo "- Date: $(date -u)" >> benchmark-results/SUMMARY.md
-          echo "- Git Commit: $(git rev-parse HEAD)" >> benchmark-results/SUMMARY.md
-          echo "- CRDT Partition Recovery: PASSED (< 1.5s convergence)" >> benchmark-results/SUMMARY.md
-          echo "- Schema Validity Conformance: 100% (Zero Hallucinations)" >> benchmark-results/SUMMARY.md
-          echo "- DTN Delivery Ratio: > 98%" >> benchmark-results/SUMMARY.md
+          node --experimental-strip-types --test tests/benchmarks/experiments.test.ts 2>&1 | tee benchmark-results/benchmark.log
+          echo "### PeerScribe Empirical Benchmark Report" > benchmark-results/SUMMARY.md
+          echo "- **Execution UTC:** $(date -u)" >> benchmark-results/SUMMARY.md
+          echo "- **Git Commit:** $(git rev-parse HEAD)" >> benchmark-results/SUMMARY.md
+          echo '```text' >> benchmark-results/SUMMARY.md
+          cat benchmark-results/benchmark.log >> benchmark-results/SUMMARY.md
+          echo '```' >> benchmark-results/SUMMARY.md
 
       - name: Upload Benchmark Results
         uses: actions/upload-artifact@v4

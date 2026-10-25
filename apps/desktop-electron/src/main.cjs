@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { LanSyncService, DEFAULT_SYNC_PORT } = require('./lan_sync.cjs');
+const { getOrCreateVaultKey, encryptVault, decryptVault } = require('./vault_crypto.cjs');
 
 // Tactical Node Identity & Local Store
 let mainWindow = null;
@@ -19,27 +21,53 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const EVENTS_FILE = path.join(DATA_DIR, 'immutable_events.jsonl');
-const VAULT_FILE = path.join(DATA_DIR, 'personal_vault.json');
+const VAULT_FILE = path.join(DATA_DIR, 'personal_vault.enc');
+const KEY_FILE = path.join(DATA_DIR, 'vault.key');
 const OUTBOX_FILE = path.join(DATA_DIR, 'sync_outbox.json');
 
 // In-memory projections and indexes
 let eventsLog = [];
 let projectedPatients = new Map();
 let outboxQueue = [];
+
+// Unconfigured blank personal vault with zero fabricated default data
 let personalVault = {
-  blood_group: 'A+',
-  allergies: ['Penicillin', 'Sulfa'],
-  critical_conditions: ['Hypertension'],
-  emergency_contacts: [
-    { name: 'Dr. John Doe', relation: 'Colleague', phone: '+1-555-0199' }
-  ]
+  is_configured: false,
+  is_synthetic_demo: false,
+  blood_group: null,
+  allergies: [],
+  critical_conditions: [],
+  emergency_contacts: []
 };
+
+// Protected Key for Local Vault Storage (AES-256-GCM via Windows DPAPI / safeStorage)
+let vaultKey = null;
+function getVaultKey() {
+  if (!vaultKey) {
+    vaultKey = getOrCreateVaultKey(KEY_FILE, { safeStorage });
+  }
+  return vaultKey;
+}
+
+function encryptVaultData(data) {
+  return encryptVault(data, getVaultKey());
+}
+
+function decryptVaultData(raw) {
+  try {
+    return decryptVault(raw, getVaultKey());
+  } catch (err) {
+    console.warn('[PersonalVault] Could not decrypt vault, starting blank:', err.message);
+    return null;
+  }
+}
 
 // Initialize persistence
 function loadPersistedState() {
   try {
     if (fs.existsSync(VAULT_FILE)) {
-      personalVault = JSON.parse(fs.readFileSync(VAULT_FILE, 'utf8'));
+      const decrypted = decryptVaultData(fs.readFileSync(VAULT_FILE, 'utf8'));
+      if (decrypted) personalVault = decrypted;
     }
     if (fs.existsSync(OUTBOX_FILE)) {
       outboxQueue = JSON.parse(fs.readFileSync(OUTBOX_FILE, 'utf8'));
@@ -307,15 +335,76 @@ function setupIpcHandlers() {
     return projectedPatients.get(patientId);
   });
 
+  // Lan Sync Instance
+  const lanSync = new LanSyncService({
+    port: 4323,
+    nodeId: 'node_desktop_electron',
+    getState: () => ({
+      eventsLog,
+      outboxQueue,
+      activeOperation
+    }),
+    onEventsIngested: (newEvents) => {
+      let addedToOutbox = false;
+      for (const evt of newEvents) {
+        eventsLog.push(evt);
+        fs.appendFileSync(EVENTS_FILE, JSON.stringify(evt) + '\n', 'utf8');
+        projectEvent(evt);
+
+        // P1-5 Store-and-forward: Enqueue into outbox for propagation to other mesh peers
+        // Suppress duplicates if already in outbox. Personal profiles are never forwarded unless
+        // explicitly disclosed via VAULT_SNAPSHOT_ATTACHED.
+        const alreadyInOutbox = outboxQueue.some(e => e.event_id === evt.event_id);
+        if (!alreadyInOutbox) {
+          outboxQueue.push(evt);
+          addedToOutbox = true;
+        }
+      }
+      if (addedToOutbox) {
+        fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
+      }
+      if (mainWindow) {
+        mainWindow.webContents.send('sync:event-received', { count: newEvents.length });
+        mainWindow.webContents.send('sync:status-updated', { outboxCount: outboxQueue.length });
+      }
+      return 0;
+    },
+    onOutboxAcknowledged: (ackedIds) => {
+      outboxQueue = outboxQueue.filter(e => !ackedIds.includes(e.event_id));
+      fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
+      if (mainWindow) {
+        mainWindow.webContents.send('sync:status-updated', { outboxCount: outboxQueue.length });
+      }
+    }
+  });
+
   ipcMain.handle('vault:get-profile', () => personalVault);
 
   ipcMain.handle('vault:save-profile', (event, profile) => {
-    personalVault = { ...personalVault, ...profile };
-    fs.writeFileSync(VAULT_FILE, JSON.stringify(personalVault, null, 2), 'utf8');
+    personalVault = { ...personalVault, ...profile, is_configured: true };
+    fs.writeFileSync(VAULT_FILE, encryptVaultData(personalVault), 'utf8');
+    return personalVault;
+  });
+
+  ipcMain.handle('vault:load-demo', () => {
+    personalVault = {
+      is_configured: true,
+      is_synthetic_demo: true,
+      blood_group: 'O+ (DEMO)',
+      allergies: ['Penicillin (SYNTHETIC DEMO)', 'Sulfa (SYNTHETIC DEMO)'],
+      critical_conditions: ['Asthma (SYNTHETIC DEMO)'],
+      emergency_contacts: [
+        { name: 'Synthetic Demo Contact', relation: 'Simulated', phone: '+0-000-000-0000' }
+      ]
+    };
+    fs.writeFileSync(VAULT_FILE, encryptVaultData(personalVault), 'utf8');
     return personalVault;
   });
 
   ipcMain.handle('vault:disclose-snapshot', (event, { patientId }) => {
+    if (!personalVault.is_configured) {
+      throw new Error('Personal profile vault has not been configured.');
+    }
     const snapshotEvent = {
       schema_version: 1,
       event_id: `evt_${crypto.randomUUID()}`,
@@ -330,7 +419,8 @@ function setupIpcHandlers() {
         blood_group: personalVault.blood_group,
         allergies: personalVault.allergies,
         critical_conditions: personalVault.critical_conditions,
-        emergency_contacts: personalVault.emergency_contacts
+        emergency_contacts: personalVault.emergency_contacts,
+        is_synthetic_demo: personalVault.is_synthetic_demo
       }
     };
     persistEvent(snapshotEvent);
@@ -339,7 +429,30 @@ function setupIpcHandlers() {
 
   ipcMain.handle('sync:get-outbox', () => outboxQueue);
 
-  // Delta & Differential In-App Update Handlers
+  ipcMain.handle('sync:get-lan-info', () => {
+    return {
+      nodeId: lanSync.nodeId,
+      port: lanSync.port,
+      ipAddresses: lanSync.getLocalIpAddresses(),
+      pairingPin: lanSync.pairingPin,
+      outboxCount: outboxQueue.length,
+      pairedPeersCount: lanSync.pairedPeers.size
+    };
+  });
+
+  ipcMain.handle('sync:pair-peer', async (event, { peerAddress, pairingPin }) => {
+    if (!peerAddress || !pairingPin) throw new Error('Peer address and pairing PIN are required');
+    return await lanSync.pairWithPeer(peerAddress, pairingPin);
+  });
+
+  ipcMain.handle('sync:get-peers', () => lanSync.getPeersList());
+
+  ipcMain.handle('sync:trigger-lan', async (event, { peerAddress, pairingPin }) => {
+    if (!peerAddress) throw new Error('Peer address is required (e.g. 192.168.1.50:4322)');
+    return await lanSync.syncWithPeer(peerAddress, pairingPin);
+  });
+
+  // Delta & Differential In-App Update Handlers (Accurate real reporting)
   ipcMain.handle('system:check-updates', async () => {
     return {
       currentVersion: '1.0.0',
@@ -351,21 +464,17 @@ function setupIpcHandlers() {
     };
   });
 
-  ipcMain.handle('system:download-update', async (event, updateInfo) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('system:update-progress', { progress: 100, transferred: 245000, total: 245000 });
-      mainWindow.webContents.send('system:update-downloaded', { version: updateInfo?.version || '1.0.1' });
-    }
-    return { success: true, message: 'Delta update package downloaded and verified.' };
+  ipcMain.handle('system:download-update', async () => {
+    return { success: false, message: 'No delta update package currently queued on release channel.' };
   });
 
   ipcMain.handle('system:apply-update', async () => {
-    return { success: true, message: 'Delta update scheduled for restart.' };
+    return { success: false, message: 'No pending updates staged for application.' };
   });
 }
 
 // App lifecycle
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   loadPersistedState();
   setupIpcHandlers();
   createWindow();

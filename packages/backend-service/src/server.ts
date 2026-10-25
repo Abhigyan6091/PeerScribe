@@ -194,21 +194,23 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
       if (pathname === '/api/v1/vault/sample' && req.method === 'GET') {
         sendJson(200, {
           profile: {
-            citizenId: 'CITIZEN-NP-94021',
-            fullName: 'Aarav Sharma',
-            bloodGroup: 'O+',
-            allergies: ['Penicillin', 'Sulfa'],
-            chronicConditions: ['Type 2 Diabetes', 'Asthma'],
-            currentMedications: [{ name: 'Metformin', dosage: '500mg' }, { name: 'Albuterol Inhaler' }],
-            emergencyContacts: [{ name: 'Maya Sharma', relation: 'Spouse', phone: '+977-9801234567' }],
+            citizenId: 'CITIZEN-DEMO-001',
+            fullName: 'Synthetic Demo Citizen',
+            isSyntheticDemo: true,
+            bloodGroup: 'O+ (DEMO)',
+            allergies: ['Penicillin (SYNTHETIC DEMO)', 'Sulfa (SYNTHETIC DEMO)'],
+            chronicConditions: ['Asthma (SYNTHETIC DEMO)'],
+            currentMedications: [{ name: 'Albuterol (SYNTHETIC DEMO)', dosage: 'Simulated' }],
+            emergencyContacts: [{ name: 'Synthetic Demo Contact', relation: 'Simulated', phone: '+0-000-000-0000' }],
             updatedAt: Date.now()
           },
           snapshot: {
-            bloodGroup: 'O+',
-            allergies: ['Penicillin', 'Sulfa'],
-            criticalConditions: ['Type 2 Diabetes', 'Asthma'],
-            currentMedicationsSummary: ['Metformin 500mg', 'Albuterol Inhaler'],
-            emergencyContacts: [{ name: 'Maya Sharma', relation: 'Spouse', phone: '+977-9801234567' }],
+            isSyntheticDemo: true,
+            bloodGroup: 'O+ (DEMO)',
+            allergies: ['Penicillin (SYNTHETIC DEMO)', 'Sulfa (SYNTHETIC DEMO)'],
+            criticalConditions: ['Asthma (SYNTHETIC DEMO)'],
+            currentMedicationsSummary: ['Albuterol (SYNTHETIC DEMO)'],
+            emergencyContacts: [{ name: 'Synthetic Demo Contact', relation: 'Simulated', phone: '+0-000-000-0000' }],
             extractedAt: Date.now()
           }
         });
