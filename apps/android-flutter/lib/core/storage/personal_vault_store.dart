@@ -20,7 +20,7 @@ class PersonalVaultStore {
   }
 
   final DatabaseHelper _db = DatabaseHelper();
-  static final AesGcm _aesGcm = AesGcm.with256Bits();
+  static final AesGcm _aesGcm = AesGcm.with256bits();
 
   late VaultKeyStorage _keyStorage;
   Map<String, dynamic>? _cachedProfile;
@@ -145,6 +145,9 @@ class PersonalVaultStore {
       isSyntheticDemo: _isDemoLoaded,
     );
   }
+
+  /// Alias for updateProfile to support both update and save semantics.
+  Future<void> saveProfile(Map<String, dynamic> profile) => updateProfile(profile);
 
   /// Explicitly loads a clearly labeled SYNTHETIC DEMO profile.
   /// Only activated when the user explicitly requests demo data.

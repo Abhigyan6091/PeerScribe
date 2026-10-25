@@ -92,7 +92,7 @@ class LanSyncService {
 
   final DatabaseHelper _db = DatabaseHelper();
   final SyncManager _syncManager = SyncManager();
-  static final crypto_pkg.AesGcm _aesGcm = crypto_pkg.AesGcm.with256Bits();
+  static final crypto_pkg.AesGcm _aesGcm = crypto_pkg.AesGcm.with256bits();
   static const Uuid _uuid = Uuid();
 
   HttpServer? _server;
@@ -478,6 +478,7 @@ class LanSyncService {
               originNodeId: incomingBundle.originNodeId,
               priority: incomingBundle.priority,
               createdAtUtc: incomingBundle.createdAtUtc,
+              vectorClock: incomingBundle.vectorClock,
               events: validEvents,
             );
             final ingestResult = await _syncManager.ingestBundle(validBundle);
@@ -727,6 +728,7 @@ class LanSyncService {
             originNodeId: inboundBundle.originNodeId,
             priority: inboundBundle.priority,
             createdAtUtc: inboundBundle.createdAtUtc,
+            vectorClock: inboundBundle.vectorClock,
             events: validInboundEvents,
           );
           final ingestResult = await _syncManager.ingestBundle(validBundle);

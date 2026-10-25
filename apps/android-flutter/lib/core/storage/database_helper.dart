@@ -196,6 +196,20 @@ class DatabaseHelper {
         .toList();
   }
 
+  /// Retrieves a specific event by its event_id, or null if not found.
+  Future<PeerScribeEvent?> getEventById(String eventId) async {
+    final db = await getDatabase();
+    final rows = await db.query(
+      'events',
+      columns: ['raw_json'],
+      where: 'event_id = ?',
+      whereArgs: [eventId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return PeerScribeEvent.fromJson(rows.first['raw_json'] as String);
+  }
+
   /// Retrieves all events for a specific patient entity.
   Future<List<PeerScribeEvent>> getEventsForPatient(String patientId) async {
     final db = await getDatabase();
