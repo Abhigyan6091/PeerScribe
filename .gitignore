@@ -25,6 +25,8 @@ yarn-debug.log*
 yarn-error.log*
 .system_generated/
 scratch/
+test_scratch_*/
+*.enc
 
 # IDE / OS
 .DS_Store

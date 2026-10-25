@@ -119,6 +119,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Node.js 22.x (Cross-Platform Host Tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:

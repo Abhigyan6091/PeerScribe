@@ -85,17 +85,21 @@ stateDiagram-v2
 
 ### 5.1 LAN HTTP Synchronization (`LanSyncService`)
 - Runs an embedded HTTP listener on port `4322` (Flutter) and `4323` (Electron).
-- Requires authentication via mutual pre-shared tactical pairing token.
-- Exchanges sync bundles containing peer vector clocks and unacknowledged outbox events.
-- Responds with missing events required by the remote peer.
-- Purges local outbox entries only after cryptographic or HTTP 200 acknowledgment from the peer.
+- Discovery: `GET /api/v1/sync/info` returns safe node metadata; **never exposes secrets, tokens, or pairing PINs**.
+- Pairing Handshake: `POST /api/v1/sync/pair` exchanges dynamic 6-digit pairing PINs and mutual 256-bit nonces. Derives 256-bit encryption keys and auth tokens via RFC 5869 HKDF-SHA256.
+- In-Transit Confidentiality: All clinical event bundles are encrypted using standard AES-256-GCM (NIST SP 800-38D).
+- Session Binding & Replay Protection: Requests require `X-PeerScribe-Session`, `X-PeerScribe-Token`, `X-PeerScribe-Peer-Id`, unique nonces, and bounded timestamp skew (<= 5 min). Mismatched peer identities are rejected with 403 Forbidden. Replayed nonces are rejected with 409 Conflict.
+- Strict Durable Acknowledgement Invariant: **No event is ever removed from the sender's outbox solely because a receiver replied HTTP 200.** Events are acknowledged only after successful durable SQLite/filesystem persistence or verification of an existing durable copy. Unpersisted, malformed, or invalid schema events are rejected and never acknowledged.
+- DTN Store-and-Forward: Ingested events are enqueued into the local outbox queue for multi-hop propagation to downstream peers. Personal profile data is isolated in separate encrypted vaults and is never forwarded unless explicitly disclosed through an emergency `VAULT_SNAPSHOT_ATTACHED` event.
 
 ### 5.2 Bluetooth Low Energy (BLE) Mesh & DTN
 - Bundles larger than BLE MTU (512 bytes) are fragmented using binary wire framing with LZ4 compression and CRC-32 integrity validation.
 - Store-and-Forward DTN outbox buffers bundles with hop counts up to 15.
 - Anti-Entropy Bloom Filters (128 bytes) suppress redundant transmissions across the local RF vicinity.
 
-### 5.3 Nostr WAN Bridge (Experimental)
+### 5.3 Nostr WAN Bridge (Explicitly Experimental)
+- Labeled experimental pending production relay transport infrastructure.
 - Uses NIP-01 canonical serialization and BIP-340 Schnorr signatures over secp256k1.
 - All clinical payloads are encrypted with ChaCha20-Poly1305 using tactical cluster keys.
+- Local duplicate suppression cache enforces bounded memory (1000 events max).
 - Unencrypted clinical information is never dispatched to public relays.

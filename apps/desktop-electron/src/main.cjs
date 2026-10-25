@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { LanSyncService, DEFAULT_SYNC_PORT, TACTICAL_PAIRING_SECRET } = require('./lan_sync.cjs');
+const { LanSyncService, DEFAULT_SYNC_PORT } = require('./lan_sync.cjs');
+const { getOrCreateVaultKey, encryptVault, decryptVault } = require('./vault_crypto.cjs');
 
 // Tactical Node Identity & Local Store
 let mainWindow = null;
@@ -21,6 +22,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const EVENTS_FILE = path.join(DATA_DIR, 'immutable_events.jsonl');
 const VAULT_FILE = path.join(DATA_DIR, 'personal_vault.enc');
+const KEY_FILE = path.join(DATA_DIR, 'vault.key');
 const OUTBOX_FILE = path.join(DATA_DIR, 'sync_outbox.json');
 
 // In-memory projections and indexes
@@ -38,31 +40,22 @@ let personalVault = {
   emergency_contacts: []
 };
 
-// Tactical Key for Local Vault Storage (AES-256-GCM)
-const VAULT_KEY = crypto.scryptSync('PEERSCRIBE_DESKTOP_VAULT_PASS', 'tactical_vault_salt_2026', 32);
+// Protected Key for Local Vault Storage (AES-256-GCM via Windows DPAPI / safeStorage)
+let vaultKey = null;
+function getVaultKey() {
+  if (!vaultKey) {
+    vaultKey = getOrCreateVaultKey(KEY_FILE, { safeStorage });
+  }
+  return vaultKey;
+}
 
 function encryptVaultData(data) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', VAULT_KEY, iv);
-  const encrypted = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return JSON.stringify({
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
-    ciphertext: encrypted.toString('base64')
-  });
+  return encryptVault(data, getVaultKey());
 }
 
 function decryptVaultData(raw) {
   try {
-    const parsed = JSON.parse(raw);
-    const iv = Buffer.from(parsed.iv, 'base64');
-    const tag = Buffer.from(parsed.tag, 'base64');
-    const ciphertext = Buffer.from(parsed.ciphertext, 'base64');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', VAULT_KEY, iv);
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return JSON.parse(decrypted.toString('utf8'));
+    return decryptVault(raw, getVaultKey());
   } catch (err) {
     console.warn('[PersonalVault] Could not decrypt vault, starting blank:', err.message);
     return null;
@@ -352,13 +345,27 @@ function setupIpcHandlers() {
       activeOperation
     }),
     onEventsIngested: (newEvents) => {
+      let addedToOutbox = false;
       for (const evt of newEvents) {
         eventsLog.push(evt);
         fs.appendFileSync(EVENTS_FILE, JSON.stringify(evt) + '\n', 'utf8');
         projectEvent(evt);
+
+        // P1-5 Store-and-forward: Enqueue into outbox for propagation to other mesh peers
+        // Suppress duplicates if already in outbox. Personal profiles are never forwarded unless
+        // explicitly disclosed via VAULT_SNAPSHOT_ATTACHED.
+        const alreadyInOutbox = outboxQueue.some(e => e.event_id === evt.event_id);
+        if (!alreadyInOutbox) {
+          outboxQueue.push(evt);
+          addedToOutbox = true;
+        }
+      }
+      if (addedToOutbox) {
+        fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
       }
       if (mainWindow) {
         mainWindow.webContents.send('sync:event-received', { count: newEvents.length });
+        mainWindow.webContents.send('sync:status-updated', { outboxCount: outboxQueue.length });
       }
       return 0;
     },
@@ -427,17 +434,22 @@ function setupIpcHandlers() {
       nodeId: lanSync.nodeId,
       port: lanSync.port,
       ipAddresses: lanSync.getLocalIpAddresses(),
-      pairingToken: TACTICAL_PAIRING_SECRET,
+      pairingPin: lanSync.pairingPin,
       outboxCount: outboxQueue.length,
       pairedPeersCount: lanSync.pairedPeers.size
     };
   });
 
+  ipcMain.handle('sync:pair-peer', async (event, { peerAddress, pairingPin }) => {
+    if (!peerAddress || !pairingPin) throw new Error('Peer address and pairing PIN are required');
+    return await lanSync.pairWithPeer(peerAddress, pairingPin);
+  });
+
   ipcMain.handle('sync:get-peers', () => lanSync.getPeersList());
 
-  ipcMain.handle('sync:trigger-lan', async (event, { peerAddress }) => {
+  ipcMain.handle('sync:trigger-lan', async (event, { peerAddress, pairingPin }) => {
     if (!peerAddress) throw new Error('Peer address is required (e.g. 192.168.1.50:4322)');
-    return await lanSync.syncWithPeer(peerAddress);
+    return await lanSync.syncWithPeer(peerAddress, pairingPin);
   });
 
   // Delta & Differential In-App Update Handlers (Accurate real reporting)

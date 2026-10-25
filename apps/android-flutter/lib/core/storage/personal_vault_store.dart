@@ -1,117 +1,89 @@
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
-import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart';
 import 'database_helper.dart';
+import 'vault_key_storage.dart';
 
 /// Local Encrypted Personal Health Vault.
 /// Strictly decoupled from temporary disaster operation records and protected with
-/// standard AES-256-CBC and HMAC-SHA256 encryption.
+/// standard AES-256-GCM authenticated encryption (NIST SP 800-38D).
 ///
+/// Keys are stored in platform-protected secure storage (Android Keystore / SecureStorage)
+/// and never hardcoded in source constants.
 /// Fabricated medical information is never placed in the default profile.
 /// A clearly labeled synthetic demo fixture is loaded ONLY when explicitly commanded by the user.
 class PersonalVaultStore {
   static final PersonalVaultStore _instance = PersonalVaultStore._internal();
   factory PersonalVaultStore() => _instance;
-  PersonalVaultStore._internal();
+  PersonalVaultStore._internal() {
+    _keyStorage = PlatformSecureVaultKeyStorage();
+  }
 
   final DatabaseHelper _db = DatabaseHelper();
+  static final AesGcm _aesGcm = AesGcm.with256Bits();
 
-  // AES-256 Key derived deterministically or stored in secure storage
-  // Default fallback local key derived with PBKDF2/SHA-256 salt for offline tactical operation
-  static const String _defaultVaultSalt = 'PEERSCRIBE_VAULT_ISOLATION_SALT_v1';
-  Uint8List? _derivedKey;
-
+  late VaultKeyStorage _keyStorage;
   Map<String, dynamic>? _cachedProfile;
   bool _isDemoLoaded = false;
 
   bool get isDemoLoaded => _isDemoLoaded;
 
-  Uint8List _getEncryptionKey() {
-    if (_derivedKey != null) return _derivedKey!;
-    final hmac = Hmac(sha256, utf8.encode(_defaultVaultSalt));
-    final digest = hmac.convert(utf8.encode('PEERSCRIBE_SECURE_LOCAL_DEVICE_VAULT_KEY'));
-    _derivedKey = Uint8List.fromList(digest.bytes);
-    return _derivedKey!;
+  /// Sets a custom key storage provider (useful for testing or platform injection).
+  void setKeyStorage(VaultKeyStorage storage) {
+    _keyStorage = storage;
+    _cachedProfile = null;
   }
 
-  /// Encrypts plaintext JSON payload using standard AES-256-CBC style stream cipher + HMAC-SHA256 integrity tag.
-  Map<String, String> _encryptPayload(String plaintext) {
-    final key = _getEncryptionKey();
-    final random = Random.secure();
-    final iv = Uint8List(16);
-    for (int i = 0; i < 16; i++) {
-      iv[i] = random.nextInt(256);
-    }
+  /// Retrieves the active 256-bit AES master key from secure storage.
+  Future<List<int>> getMasterKey() async {
+    return await _keyStorage.getOrCreateMasterKey();
+  }
 
+  /// Encrypts plaintext JSON payload using standard AES-256-GCM with a 96-bit random nonce
+  /// and 128-bit authentication tag.
+  Future<Map<String, String>> encryptPayload(String plaintext, [List<int>? customKey]) async {
+    final keyBytes = customKey ?? await getMasterKey();
+    final secretKey = SecretKey(keyBytes);
     final plaintextBytes = utf8.encode(plaintext);
-    // Stream encryption with keystream generated via HMAC-SHA256(key, iv || counter)
-    final ciphertext = Uint8List(plaintextBytes.length);
-    int offset = 0;
-    int counter = 0;
 
-    while (offset < plaintextBytes.length) {
-      final counterBytes = Uint8List(4)..buffer.asByteData().setUint32(0, counter, Endian.big);
-      final blockHmac = Hmac(sha256, key);
-      final keyStream = blockHmac.convert([...iv, ...counterBytes]).bytes;
-
-      for (int i = 0; i < keyStream.length && offset < plaintextBytes.length; i++) {
-        ciphertext[offset] = plaintextBytes[offset] ^ keyStream[i];
-        offset++;
-      }
-      counter++;
-    }
-
-    // Integrity auth tag: HMAC-SHA256(key, iv || ciphertext)
-    final authHmac = Hmac(sha256, key);
-    final authTag = authHmac.convert([...iv, ...ciphertext]).bytes;
+    final secretBox = await _aesGcm.encrypt(
+      plaintextBytes,
+      secretKey: secretKey,
+    );
 
     return {
-      'ciphertext': base64.encode(ciphertext),
-      'iv': base64.encode(iv),
-      'auth_tag': base64.encode(authTag),
+      'ciphertext': base64.encode(secretBox.cipherText),
+      'iv': base64.encode(secretBox.nonce),
+      'auth_tag': base64.encode(secretBox.mac.bytes),
     };
   }
 
-  /// Decrypts encrypted payload verifying HMAC-SHA256 integrity tag.
-  String? _decryptPayload(String ciphertextBase64, String ivBase64, String authTagBase64) {
+  /// Decrypts ciphertext verifying the 128-bit authentication tag.
+  /// Returns null if tampered, wrong key, or corrupted without throwing.
+  Future<String?> decryptPayload(
+    String ciphertextBase64,
+    String ivBase64,
+    String authTagBase64, [
+    List<int>? customKey,
+  ]) async {
     try {
-      final key = _getEncryptionKey();
-      final ciphertext = base64.decode(ciphertextBase64);
-      final iv = base64.decode(ivBase64);
-      final expectedAuthTag = base64.decode(authTagBase64);
+      final keyBytes = customKey ?? await getMasterKey();
+      final secretKey = SecretKey(keyBytes);
 
-      // Verify integrity
-      final authHmac = Hmac(sha256, key);
-      final computedTag = authHmac.convert([...iv, ...ciphertext]).bytes;
+      final secretBox = SecretBox(
+        base64.decode(ciphertextBase64),
+        nonce: base64.decode(ivBase64),
+        mac: Mac(base64.decode(authTagBase64)),
+      );
 
-      bool valid = computedTag.length == expectedAuthTag.length;
-      for (int i = 0; i < computedTag.length && valid; i++) {
-        if (computedTag[i] != expectedAuthTag[i]) valid = false;
-      }
-      if (!valid) {
-        return null; // Integrity check failed
-      }
+      final decryptedBytes = await _aesGcm.decrypt(
+        secretBox,
+        secretKey: secretKey,
+      );
 
-      // Decrypt
-      final decrypted = Uint8List(ciphertext.length);
-      int offset = 0;
-      int counter = 0;
-
-      while (offset < ciphertext.length) {
-        final counterBytes = Uint8List(4)..buffer.asByteData().setUint32(0, counter, Endian.big);
-        final blockHmac = Hmac(sha256, key);
-        final keyStream = blockHmac.convert([...iv, ...counterBytes]).bytes;
-
-        for (int i = 0; i < keyStream.length && offset < ciphertext.length; i++) {
-          decrypted[offset] = ciphertext[offset] ^ keyStream[i];
-          offset++;
-        }
-        counter++;
-      }
-
-      return utf8.decode(decrypted);
+      return utf8.decode(decryptedBytes);
     } catch (_) {
+      // SecretBoxAuthenticationError or decoding error -> tampering or wrong key
       return null;
     }
   }
@@ -125,7 +97,7 @@ class PersonalVaultStore {
 
     final row = await _db.getEncryptedProfile();
     if (row != null) {
-      final decryptedJson = _decryptPayload(
+      final decryptedJson = await decryptPayload(
         row['encrypted_payload'] as String,
         row['iv_base64'] as String,
         row['auth_tag_base64'] as String,
@@ -136,6 +108,9 @@ class PersonalVaultStore {
           _isDemoLoaded = row['is_synthetic_demo'] == 1;
           return Map.unmodifiable(_cachedProfile!);
         } catch (_) {}
+      } else {
+        // Migration or corrupted/un-decryptable record: return blank unconfigured profile
+        _cachedProfile = null;
       }
     }
 
@@ -152,7 +127,7 @@ class PersonalVaultStore {
     return Map.unmodifiable(_cachedProfile!);
   }
 
-  /// Updates and encrypts user profile in SQLite storage.
+  /// Updates and encrypts user profile in SQLite storage using standard AES-256-GCM.
   Future<void> updateProfile(Map<String, dynamic> updated) async {
     final current = await getProfile();
     _cachedProfile = {
@@ -162,7 +137,7 @@ class PersonalVaultStore {
       'updated_at_utc': DateTime.now().toUtc().toIso8601String(),
     };
 
-    final encrypted = _encryptPayload(json.encode(_cachedProfile));
+    final encrypted = await encryptPayload(json.encode(_cachedProfile));
     await _db.saveEncryptedProfile(
       encryptedPayload: encrypted['ciphertext']!,
       ivBase64: encrypted['iv']!,
@@ -191,7 +166,7 @@ class PersonalVaultStore {
       'is_emergency_disclosed': false,
     };
 
-    final encrypted = _encryptPayload(json.encode(_cachedProfile));
+    final encrypted = await encryptPayload(json.encode(_cachedProfile));
     await _db.saveEncryptedProfile(
       encryptedPayload: encrypted['ciphertext']!,
       ivBase64: encrypted['iv']!,

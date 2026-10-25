@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:peerscribe_mobile/core/storage/database_helper.dart';
 import 'package:peerscribe_mobile/core/storage/personal_vault_store.dart';
+import 'package:peerscribe_mobile/core/storage/vault_key_storage.dart';
 import 'package:peerscribe_mobile/core/protocol/event_model.dart';
 
 void main() {
@@ -264,6 +265,7 @@ void main() {
 
     test('PersonalVaultStore: default profile is unconfigured and does not contain fabricated data', () async {
       final vault = PersonalVaultStore();
+      vault.setKeyStorage(InMemoryVaultKeyStorage());
       await vault.clearProfile();
 
       final profile = await vault.getProfile();
@@ -289,6 +291,90 @@ void main() {
       final demoSnapshot = vault.generateEmergencySnapshot();
       expect(demoSnapshot, isNotNull);
       expect(demoSnapshot!['is_synthetic_demo'], isTrue);
+    });
+
+    test('P0-2: AES-256-GCM Personal Vault roundtrip, tampering rejection, wrong key, and restart persistence', () async {
+      final keyStorage = InMemoryVaultKeyStorage();
+      final vault = PersonalVaultStore();
+      vault.setKeyStorage(keyStorage);
+      await vault.clearProfile();
+
+      // 1. Verify key generation
+      final masterKey = await keyStorage.getOrCreateMasterKey();
+      expect(masterKey.length, equals(32), reason: 'Master key must be exactly 256 bits (32 bytes)');
+
+      // 2. Roundtrip encryption & decryption
+      final testProfile = {
+        'blood_group': 'O-',
+        'allergies': ['Penicillin', 'Sulfa'],
+        'critical_conditions': ['Severe Asthma'],
+        'emergency_contacts': [{'name': 'Contact A', 'phone': '1234'}],
+      };
+      await vault.saveProfile(testProfile);
+
+      final loadedProfile = await vault.getProfile();
+      expect(loadedProfile['is_configured'], isTrue);
+      expect(loadedProfile['blood_group'], equals('O-'));
+      expect(loadedProfile['allergies'], contains('Penicillin'));
+
+      // 3. Verify ciphertext in SQLite database is authenticated encrypted (not plaintext)
+      final rawDbRow = await dbHelper.getEncryptedProfile();
+      expect(rawDbRow, isNotNull);
+      expect(rawDbRow!['encrypted_payload'], isNot(contains('Severe Asthma')));
+      expect(rawDbRow['iv_base64'], isNotNull);
+      expect(rawDbRow['auth_tag_base64'], isNotNull);
+
+      // 4. Tampered ciphertext rejection
+      final originalCipher = rawDbRow['encrypted_payload'] as String;
+      final tamperedCipher = originalCipher.substring(0, originalCipher.length - 4) + 'AAAA';
+      await dbHelper.saveEncryptedProfile(
+        encryptedPayload: tamperedCipher,
+        ivBase64: rawDbRow['iv_base64'] as String,
+        authTagBase64: rawDbRow['auth_tag_base64'] as String,
+        isSyntheticDemo: false,
+      );
+
+      final tamperedResult = await vault.decryptPayload(
+        tamperedCipher,
+        rawDbRow['iv_base64'] as String,
+        rawDbRow['auth_tag_base64'] as String,
+      );
+      expect(tamperedResult, isNull, reason: 'Tampered ciphertext must be rejected by AES-GCM tag verification');
+
+      // 5. Wrong key rejection
+      final wrongKeyStorage = InMemoryVaultKeyStorage();
+      final wrongKey = await wrongKeyStorage.getOrCreateMasterKey();
+      final wrongKeyResult = await vault.decryptPayload(
+        originalCipher,
+        rawDbRow['iv_base64'] as String,
+        rawDbRow['auth_tag_base64'] as String,
+        wrongKey,
+      );
+      expect(wrongKeyResult, isNull, reason: 'Decryption with incorrect key must fail without crashing');
+
+      // 6. Persistence across restart (simulated with same key storage)
+      final restartedVault = PersonalVaultStore();
+      restartedVault.setKeyStorage(keyStorage);
+      // Restore valid ciphertext
+      await dbHelper.saveEncryptedProfile(
+        encryptedPayload: originalCipher,
+        ivBase64: rawDbRow['iv_base64'] as String,
+        authTagBase64: rawDbRow['auth_tag_base64'] as String,
+        isSyntheticDemo: false,
+      );
+      final restoredProfile = await restartedVault.getProfile();
+      expect(restoredProfile['is_configured'], isTrue);
+      expect(restoredProfile['blood_group'], equals('O-'));
+
+      // 7. Migration / recovery when corrupt vault cannot be decrypted
+      await dbHelper.saveEncryptedProfile(
+        encryptedPayload: 'NOT_VALID_ENCRYPTED_DATA',
+        ivBase64: 'INVALID_IV',
+        authTagBase64: 'INVALID_TAG',
+        isSyntheticDemo: false,
+      );
+      final fallbackProfile = await restartedVault.getProfile();
+      expect(fallbackProfile['is_configured'], isFalse, reason: 'Corrupt vault should safely fallback to unconfigured profile');
     });
   });
 }

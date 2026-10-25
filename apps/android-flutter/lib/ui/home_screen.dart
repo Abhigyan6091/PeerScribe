@@ -110,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final hostController = TextEditingController(text: '10.0.2.2:4323');
+    final pinController = TextEditingController();
     bool isSyncing = false;
     String? syncStatusMessage;
     bool? syncSuccess;
@@ -139,9 +140,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: const TextStyle(color: TacticalTheme.primary, fontSize: 12, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 4),
-                      const Text(
-                        'Pairing Token: PEERSCRIBE-TACTICAL-MESH-2026',
-                        style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11),
+                      Text(
+                        'This Device Pairing PIN: ${LanSyncService().pairingPin}',
+                        style: const TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 12),
                       TextField(
@@ -150,6 +151,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         decoration: const InputDecoration(
                           labelText: 'Peer Address (Host:Port)',
                           hintText: 'e.g. 192.168.1.15:4323 or 10.0.2.2:4323',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: pinController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          labelText: 'Peer Pairing PIN',
+                          hintText: 'e.g. TACTICAL-123456',
                           border: OutlineInputBorder(),
                         ),
                       ),
@@ -192,7 +203,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         syncSuccess = null;
                       });
 
-                      final result = await LanSyncService().syncWithPeer(hostController.text.trim());
+                      final pinText = pinController.text.trim();
+                      final result = await LanSyncService().syncWithPeer(
+                        hostController.text.trim(),
+                        pairingPin: pinText.isNotEmpty ? pinText : null,
+                      );
                       if (mounted) {
                         await _refreshState();
                       }
@@ -219,6 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } finally {
       hostController.dispose();
+      pinController.dispose();
     }
     if (mounted) {
       await _refreshState();
