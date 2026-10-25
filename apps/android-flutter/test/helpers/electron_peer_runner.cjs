@@ -10,6 +10,10 @@ let service = null;
 let eventsLog = [];
 let outboxQueue = [];
 let activeOperation = { operation_id: 'OP_CROSS_PLATFORM_TEST' };
+// Redirect console.log to stderr so stdout contains exclusively JSON-RPC responses
+console.log = (...args) => {
+  process.stderr.write(args.join(' ') + '\n');
+};
 
 const rl = readline.createInterface({
   input: process.stdin,

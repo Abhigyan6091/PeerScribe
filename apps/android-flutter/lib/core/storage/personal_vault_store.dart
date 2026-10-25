@@ -34,6 +34,11 @@ class PersonalVaultStore {
     _cachedProfile = null;
   }
 
+  /// Invalidates in-memory cached profile so subsequent reads query storage.
+  void invalidateCache() {
+    _cachedProfile = null;
+  }
+
   /// Retrieves the active 256-bit AES master key from secure storage.
   Future<List<int>> getMasterKey() async {
     return await _keyStorage.getOrCreateMasterKey();

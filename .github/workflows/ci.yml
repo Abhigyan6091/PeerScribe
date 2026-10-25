@@ -157,7 +157,14 @@ jobs:
 
       - name: Run Flutter Unit & START Triage Tests
         working-directory: apps/android-flutter
-        run: flutter test
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! flutter test --reporter expanded 2>&1 | tee flutter_test.log; then
+            echo "::error title=Flutter Test Failed::$(tail -n 25 flutter_test.log | tr '\r\n' '  ')"
+            tail -n 60 flutter_test.log
+            exit 1
+          fi
 
       - name: Build Installable Android APK
         working-directory: apps/android-flutter

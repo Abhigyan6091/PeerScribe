@@ -33,8 +33,13 @@ class NodePeerHarness {
 
   Future<Map<String, dynamic>> sendCommand(Map<String, dynamic> cmd) async {
     process.stdin.writeln(json.encode(cmd));
-    if (await _iterator.moveNext()) {
-      return json.decode(_iterator.current) as Map<String, dynamic>;
+    while (await _iterator.moveNext()) {
+      final line = _iterator.current.trim();
+      if (line.startsWith('{') && line.endsWith('}')) {
+        try {
+          return json.decode(line) as Map<String, dynamic>;
+        } catch (_) {}
+      }
     }
     throw StateError('Node peer process exited or did not respond');
   }

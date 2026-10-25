@@ -367,6 +367,7 @@ void main() {
       expect(restoredProfile['blood_group'], equals('O-'));
 
       // 7. Migration / recovery when corrupt vault cannot be decrypted
+      restartedVault.invalidateCache();
       await dbHelper.saveEncryptedProfile(
         encryptedPayload: 'NOT_VALID_ENCRYPTED_DATA',
         ivBase64: 'INVALID_IV',
