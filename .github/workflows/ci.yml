@@ -35,7 +35,15 @@ jobs:
         run: npm run test:protocol
 
       - name: Run Core Engine, Adapters & Benchmark Experiments
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! npm test 2>&1 | tee test.log; then
+            ERR_MSG=$(tail -n 20 test.log | tr '\r\n' '  ')
+            echo "::error title=Core Engine Test Failed::$ERR_MSG"
+            tail -n 60 test.log
+            exit 1
+          fi
 
   # -------------------------------------------------------------
   # Job 2: Windows Electron Desktop Build & Packaging

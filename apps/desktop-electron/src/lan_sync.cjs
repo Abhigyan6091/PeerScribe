@@ -133,12 +133,13 @@ class LanSyncService {
         let payloadTooLarge = false;
 
         req.on('data', chunk => {
+          if (payloadTooLarge) return;
           bytesRead += chunk.length;
           if (bytesRead > MAX_REQUEST_SIZE_BYTES) {
             payloadTooLarge = true;
             res.writeHead(413, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Payload Too Large: Exceeds 2 MB limit' }));
-            req.destroy();
+            req.resume();
             return;
           }
           body += chunk;
