@@ -346,7 +346,7 @@ class DatabaseHelper {
     );
 
     if (rows.isEmpty) return null;
-    return rows.first;
+    return Map<String, dynamic>.from(rows.first);
   }
 
   /// Deletes the personal profile vault record.

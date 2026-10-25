@@ -30,8 +30,14 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    LanSyncService().startServer();
-    _refreshState();
+    _initServices();
+  }
+
+  Future<void> _initServices() async {
+    await LanSyncService().startServer();
+    if (mounted) {
+      await _refreshState();
+    }
   }
 
   Future<void> _refreshState() async {
