@@ -16,6 +16,12 @@ const int maxRequestSizeBytes = 2 * 1024 * 1024; // 2 MB limit
 const int maxEventsPerBundle = 500;
 const int sessionTtlMs = 24 * 60 * 60 * 1000; // 24 hours
 const int maxTimestampSkewMs = 5 * 60 * 1000; // 5 minutes
+const int defaultPairingPinTtlMs = 60 * 1000; // 60 seconds short pairing window
+const int maxFailedPairingAttempts = 3;
+const int pairingLockoutMs = 5 * 60 * 1000; // 5 minutes lockout after 3 failed attempts
+const int handshakeTtlMs = 60 * 1000; // 60 seconds pending handshake TTL
+
+final crypto_pkg.X25519 _x25519 = crypto_pkg.X25519();
 
 /// RFC 5869 HKDF-SHA256 Key Derivation
 List<int> hkdfSha256({
@@ -29,7 +35,55 @@ List<int> hkdfSha256({
   return okm.sublist(0, length);
 }
 
-/// Derives 256-bit session key and 256-bit auth token from pairing PIN and mutual nonces.
+/// Derives handshake keys from Diffie-Hellman shared secret and out-of-band PIN authorization
+/// using standard RFC 5869 HKDF-SHA256.
+Map<String, dynamic> deriveHandshakeKeys({
+  required List<int> sharedDH,
+  required List<int> clientNonce,
+  required List<int> serverNonce,
+  required String clientNodeId,
+  required String serverNodeId,
+  required String pairingPin,
+}) {
+  final salt = sha256.convert([...clientNonce, ...serverNonce]).bytes;
+  final pinBytes = utf8.encode(pairingPin.trim());
+
+  final confirmInfo = [...utf8.encode('PeerScribe-LAN-v2-Confirm-'), ...pinBytes];
+  final confirmKey = hkdfSha256(ikm: sharedDH, salt: salt, info: confirmInfo, length: 32);
+
+  final encInfo = [...utf8.encode('PeerScribe-LAN-v2-Enc-$clientNodeId-$serverNodeId-'), ...pinBytes];
+  final sessionKey = hkdfSha256(ikm: sharedDH, salt: salt, info: encInfo, length: 32);
+
+  final tokenInfo = [...utf8.encode('PeerScribe-LAN-v2-Auth-$clientNodeId-$serverNodeId-'), ...pinBytes];
+  final sessionToken = hkdfSha256(ikm: sharedDH, salt: salt, info: tokenInfo, length: 32);
+
+  final sas = sha256.convert([...sharedDH, ...salt]).toString().substring(0, 6).toUpperCase();
+
+  return {
+    'confirmKey': confirmKey,
+    'sessionKey': sessionKey,
+    'sessionToken': sessionToken,
+    'sas': sas,
+  };
+}
+
+/// Computes HMAC-SHA256 authentication proof for pairing confirmation.
+List<int> computeAuthProof(List<int> confirmKey, String role, String handshakeId, String firstNodeId, String secondNodeId) {
+  final data = utf8.encode('$role:$handshakeId:$firstNodeId:$secondNodeId');
+  return Hmac(sha256, confirmKey).convert(data).bytes;
+}
+
+/// Constant-time byte array comparison to prevent timing side channels.
+bool timingSafeEquals(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  int diff = 0;
+  for (int i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff == 0;
+}
+
+/// Legacy derivation helper maintained for backwards compatibility.
 Map<String, List<int>> deriveSessionKeys({
   required String pairingPin,
   required String clientNonceBase64,
@@ -82,9 +136,15 @@ class LanSyncResult {
 }
 
 /// Real Cross-Platform LAN Synchronization Service for Android Flutter.
-/// Implements standard AES-256-GCM authenticated encryption in transit,
-/// dynamic pairing PIN handshakes with HKDF key derivation, session binding,
-/// strict durable acknowledgement semantics, and replay protection.
+/// - Authenticated, encrypted sessions over local Wi-Fi / Hotspot
+/// - Ephemeral X25519 Diffie-Hellman + out-of-band PIN authorization
+/// - Cryptographically verified peer identity and mutual HMAC-SHA256 proofs
+/// - Short pairing PIN expiration, single-use PIN consumption, and failed-attempt lockout
+/// - In-transit AES-256-GCM clinical payload encryption
+/// - Mandatory session, token, peer ID, nonce replay, and timestamp validation on all protected routes
+/// - Strict acknowledgement semantics (only transmitted durable events acknowledged)
+/// - Anti-forgery protections preventing arbitrary outbox clearing
+/// - DTN Store-and-Forward multi-hop propagation
 class LanSyncService {
   static final LanSyncService _instance = LanSyncService._internal();
   factory LanSyncService() => _instance;
@@ -99,9 +159,16 @@ class LanSyncService {
   int _port = defaultTacticalMobilePort;
   String _nodeId = 'node_mobile_flutter';
 
-  // Active Pairing PIN for incoming pairing requests
+  // Active Pairing PIN for incoming pairing requests (short TTL by default)
   String _activePairingPin = 'TACTICAL-${100000 + Random.secure().nextInt(900000)}';
-  int _pairingPinExpiresAt = DateTime.now().millisecondsSinceEpoch + sessionTtlMs;
+  int _pairingPinExpiresAt = DateTime.now().millisecondsSinceEpoch + defaultPairingPinTtlMs;
+  bool _pinConsumed = false;
+
+  // Pending handshakes: handshakeId -> HandshakeDetails
+  final Map<String, Map<String, dynamic>> _pendingHandshakes = {};
+
+  // Failed attempts tracking: clientId -> { 'failedCount': int, 'lockedUntil': int }
+  final Map<String, Map<String, dynamic>> _failedAttempts = {};
 
   // Active Sessions hosted on this server: sessionId -> SessionDetails
   final Map<String, Map<String, dynamic>> _activeSessions = {};
@@ -118,7 +185,7 @@ class LanSyncService {
   int get port => _port;
   String get nodeId => _nodeId;
   bool get isListening => _server != null;
-  String get pairingPin => _activePairingPin;
+  String get pairingPin => _pinConsumed || DateTime.now().millisecondsSinceEpoch > _pairingPinExpiresAt ? '' : _activePairingPin;
   List<Map<String, dynamic>> get pairedPeers => _pairedPeers.values.toList();
   List<Map<String, dynamic>> get rejectedEventsLog => List.unmodifiable(_rejectedEventsLog);
 
@@ -126,10 +193,40 @@ class LanSyncService {
     _nodeId = id;
   }
 
-  String setPairingPin(String pin, {int ttlSeconds = 86400}) {
+  String setPairingPin(String pin, {int ttlSeconds = 60}) {
     _activePairingPin = pin.trim();
     _pairingPinExpiresAt = DateTime.now().millisecondsSinceEpoch + (ttlSeconds * 1000);
+    _pinConsumed = false;
     return _activePairingPin;
+  }
+
+  bool isPinActive() {
+    return !_pinConsumed && DateTime.now().millisecondsSinceEpoch <= _pairingPinExpiresAt;
+  }
+
+  bool _isLockedOut(String clientId) {
+    final rec = _failedAttempts[clientId];
+    if (rec == null) return false;
+    final lockedUntil = rec['lockedUntil'] as int? ?? 0;
+    if (DateTime.now().millisecondsSinceEpoch < lockedUntil) return true;
+    if (DateTime.now().millisecondsSinceEpoch >= lockedUntil && (rec['failedCount'] as int? ?? 0) >= maxFailedPairingAttempts) {
+      _failedAttempts.remove(clientId);
+    }
+    return false;
+  }
+
+  void _recordFailedAttempt(String clientId) {
+    final rec = _failedAttempts[clientId] ?? {'failedCount': 0, 'lockedUntil': 0};
+    final count = (rec['failedCount'] as int? ?? 0) + 1;
+    rec['failedCount'] = count;
+    if (count >= maxFailedPairingAttempts) {
+      rec['lockedUntil'] = DateTime.now().millisecondsSinceEpoch + pairingLockoutMs;
+    }
+    _failedAttempts[clientId] = rec;
+  }
+
+  void _resetFailedAttempts(String clientId) {
+    _failedAttempts.remove(clientId);
   }
 
   /// Encrypts plaintext or object payload in transit using AES-256-GCM.
@@ -174,12 +271,12 @@ class LanSyncService {
 
     try {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
+      _port = _server!.port;
       _server!.listen(_handleIncomingRequest);
       return _port;
     } catch (_) {
-      // If port is occupied, try fallback port
-      _port = port + 10;
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      _port = _server!.port;
       _server!.listen(_handleIncomingRequest);
       return _port;
     }
@@ -199,6 +296,7 @@ class LanSyncService {
     }
 
     final path = request.uri.path;
+    final clientIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
 
     try {
       // Enforce 2 MB maximum payload limit
@@ -259,67 +357,179 @@ class LanSyncService {
       }
 
       // -----------------------------------------------------------------
-      // Route: POST /api/v1/sync/pair
-      // Explicit pairing handshake via PIN with mutual nonces & HKDF derivation
+      // Route: POST /api/v1/sync/pair-init
+      // Step 1 of Authenticated Diffie-Hellman Handshake.
       // -----------------------------------------------------------------
-      if (path == '/api/v1/sync/pair' && request.method == 'POST') {
+      if (path == '/api/v1/sync/pair-init' && request.method == 'POST') {
         final clientNodeId = jsonBody['client_node_id'] as String?;
-        final providedPin = jsonBody['pairing_pin'] as String?;
-        final clientNonce = jsonBody['client_nonce'] as String?;
+        final clientEphemeralPubBase64 = jsonBody['client_ephemeral_pub'] as String?;
+        final clientNonceBase64 = jsonBody['client_nonce'] as String?;
 
-        if (clientNodeId == null || providedPin == null || clientNonce == null) {
+        if (clientNodeId == null || clientEphemeralPubBase64 == null || clientNonceBase64 == null) {
           response.statusCode = HttpStatus.badRequest;
           response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Missing required pairing fields (client_node_id, pairing_pin, client_nonce)'}));
+          response.write(json.encode({'error': 'Missing required handshake initialization fields (client_node_id, client_ephemeral_pub, client_nonce)'}));
           await response.close();
           return;
         }
 
-        if (DateTime.now().millisecondsSinceEpoch > _pairingPinExpiresAt) {
+        if (_isLockedOut(clientNodeId) || _isLockedOut(clientIp)) {
+          response.statusCode = HttpStatus.tooManyRequests;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Too many failed pairing attempts. Lockout in effect.'}));
+          await response.close();
+          return;
+        }
+
+        if (!isPinActive()) {
           response.statusCode = HttpStatus.unauthorized;
           response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Pairing PIN expired. Request a fresh PIN from the host device.'}));
+          response.write(json.encode({'error': 'Pairing authorization window is closed or expired. Request a new PIN on the host device.'}));
           await response.close();
           return;
         }
 
-        if (providedPin.trim() != _activePairingPin.trim()) {
-          response.statusCode = HttpStatus.unauthorized;
+        final clientPubBytes = base64.decode(clientEphemeralPubBase64);
+        if (clientPubBytes.length != 32) {
+          response.statusCode = HttpStatus.badRequest;
           response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Invalid pairing PIN'}));
+          response.write(json.encode({'error': 'Malformed client_ephemeral_pub: must be 32 bytes base64'}));
           await response.close();
           return;
         }
 
+        final serverEphemeral = await _x25519.newKeyPair();
+        final serverPub = await serverEphemeral.extractPublicKey();
         final serverNonceBytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
-        final serverNonce = base64.encode(serverNonceBytes);
-        final sessionId = 'sess_${_uuid.v4()}';
+        final clientNonceBytes = base64.decode(clientNonceBase64);
 
-        final derived = deriveSessionKeys(
-          pairingPin: providedPin.trim(),
-          clientNonceBase64: clientNonce,
-          serverNonceBase64: serverNonce,
+        final remotePublicKey = crypto_pkg.SimplePublicKey(clientPubBytes, type: crypto_pkg.KeyPairType.x25519);
+        final sharedSecretKey = await _x25519.sharedSecretKey(keyPair: serverEphemeral, remotePublicKey: remotePublicKey);
+        final sharedDH = await sharedSecretKey.extractBytes();
+
+        final derived = deriveHandshakeKeys(
+          sharedDH: sharedDH,
+          clientNonce: clientNonceBytes,
+          serverNonce: serverNonceBytes,
           clientNodeId: clientNodeId,
           serverNodeId: _nodeId,
+          pairingPin: _activePairingPin,
         );
+
+        final handshakeId = 'hs_${_uuid.v4()}';
+        _pendingHandshakes[handshakeId] = {
+          'handshakeId': handshakeId,
+          'clientNodeId': clientNodeId,
+          'clientIp': clientIp,
+          'confirmKey': derived['confirmKey'],
+          'sessionKey': derived['sessionKey'],
+          'sessionToken': base64.encode(derived['sessionToken'] as List<int>),
+          'sas': derived['sas'],
+          'expiresAt': DateTime.now().millisecondsSinceEpoch + handshakeTtlMs,
+        };
+
+        response.statusCode = HttpStatus.ok;
+        response.headers.contentType = ContentType.json;
+        response.write(json.encode({
+          'status': 'INITIATED',
+          'handshake_id': handshakeId,
+          'server_node_id': _nodeId,
+          'server_ephemeral_pub': base64.encode(serverPub.bytes),
+          'server_nonce': base64.encode(serverNonceBytes),
+          'sas': derived['sas'],
+          'expires_in_seconds': handshakeTtlMs ~/ 1000,
+        }));
+        await response.close();
+        return;
+      }
+
+      // -----------------------------------------------------------------
+      // Route: POST /api/v1/sync/pair-confirm
+      // Step 2 of Authenticated Diffie-Hellman Handshake.
+      // -----------------------------------------------------------------
+      if (path == '/api/v1/sync/pair-confirm' && request.method == 'POST') {
+        final handshakeId = jsonBody['handshake_id'] as String?;
+        final clientNodeId = jsonBody['client_node_id'] as String?;
+        final clientProofBase64 = jsonBody['client_proof'] as String?;
+
+        if (handshakeId == null || clientNodeId == null || clientProofBase64 == null) {
+          response.statusCode = HttpStatus.badRequest;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Missing required handshake confirmation fields (handshake_id, client_node_id, client_proof)'}));
+          await response.close();
+          return;
+        }
+
+        if (_isLockedOut(clientNodeId) || _isLockedOut(clientIp)) {
+          response.statusCode = HttpStatus.tooManyRequests;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Too many failed pairing attempts. Lockout in effect.'}));
+          await response.close();
+          return;
+        }
+
+        final pending = _pendingHandshakes[handshakeId];
+        if (pending == null || DateTime.now().millisecondsSinceEpoch > (pending['expiresAt'] as int)) {
+          _pendingHandshakes.remove(handshakeId);
+          response.statusCode = HttpStatus.unauthorized;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Handshake session expired or invalid. Please re-initiate pairing.'}));
+          await response.close();
+          return;
+        }
+
+        if (pending['clientNodeId'] != clientNodeId) {
+          _recordFailedAttempt(clientNodeId);
+          response.statusCode = HttpStatus.forbidden;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Forbidden: Client identity does not match handshake initialization'}));
+          await response.close();
+          return;
+        }
+
+        final confirmKey = pending['confirmKey'] as List<int>;
+        final expectedClientProof = computeAuthProof(confirmKey, 'CLIENT-PROOF', handshakeId, clientNodeId, _nodeId);
+        final providedProof = base64.decode(clientProofBase64);
+
+        if (!timingSafeEquals(providedProof, expectedClientProof)) {
+          _pendingHandshakes.remove(handshakeId);
+          _recordFailedAttempt(clientNodeId);
+          _recordFailedAttempt(clientIp);
+          response.statusCode = HttpStatus.unauthorized;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Invalid pairing authorization proof.'}));
+          await response.close();
+          return;
+        }
+
+        final serverProof = computeAuthProof(confirmKey, 'SERVER-PROOF', handshakeId, _nodeId, clientNodeId);
+        final sessionId = 'sess_${_uuid.v4()}';
 
         _activeSessions[sessionId] = {
           'sessionId': sessionId,
           'peerId': clientNodeId,
-          'sessionKey': derived['sessionKey']!,
-          'sessionToken': base64.encode(derived['sessionToken']!),
+          'sessionKey': pending['sessionKey'],
+          'sessionToken': pending['sessionToken'],
           'createdAt': DateTime.now().millisecondsSinceEpoch,
           'expiresAt': DateTime.now().millisecondsSinceEpoch + sessionTtlMs,
           'seenNonces': <String>{},
+          'transmittedOutboxEventIds': <String>{},
         };
+
+        _pendingHandshakes.remove(handshakeId);
+        _resetFailedAttempts(clientNodeId);
+        _resetFailedAttempts(clientIp);
+
+        // Single-use PIN consumption: Immediately consume PIN
+        _pinConsumed = true;
+        _activePairingPin = '';
 
         response.statusCode = HttpStatus.ok;
         response.headers.contentType = ContentType.json;
         response.write(json.encode({
           'status': 'PAIRED',
           'session_id': sessionId,
-          'session_token': base64.encode(derived['sessionToken']!),
-          'server_nonce': serverNonce,
+          'server_proof': base64.encode(serverProof),
           'server_node_id': _nodeId,
           'expires_in_seconds': sessionTtlMs ~/ 1000,
         }));
@@ -327,8 +537,20 @@ class LanSyncService {
         return;
       }
 
+      // Reject insecure plaintext PIN endpoint
+      if (path == '/api/v1/sync/pair' && request.method == 'POST') {
+        response.statusCode = HttpStatus.badRequest;
+        response.headers.contentType = ContentType.json;
+        response.write(json.encode({
+          'error': 'Insecure pairing rejected: Plaintext pairing_pin transmission is prohibited. Use authenticated Diffie-Hellman handshake.'
+        }));
+        await response.close();
+        return;
+      }
+
       // -----------------------------------------------------------------
-      // Session Authentication Guard for Bundle and Ack routes
+      // Session Authentication & Replay Protection Guard
+      // Mandatory on EVERY protected route (/api/v1/sync/bundle, /api/v1/sync/ack)
       // -----------------------------------------------------------------
       final sessionId = request.headers.value('X-PeerScribe-Session');
       final sessionToken = request.headers.value('X-PeerScribe-Token');
@@ -337,14 +559,19 @@ class LanSyncService {
       final requestTimestamp = request.headers.value('X-PeerScribe-Timestamp');
 
       if (path == '/api/v1/sync/bundle' || path == '/api/v1/sync/ack') {
-        if (sessionId == null || sessionToken == null || claimedPeerId == null) {
+        // 1. Mandatory header presence
+        if (sessionId == null || sessionToken == null || claimedPeerId == null ||
+            requestNonce == null || requestTimestamp == null ||
+            sessionId.isEmpty || sessionToken.isEmpty || claimedPeerId.isEmpty ||
+            requestNonce.isEmpty || requestTimestamp.isEmpty) {
           response.statusCode = HttpStatus.unauthorized;
           response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Unauthorized: Missing session authentication headers'}));
+          response.write(json.encode({'error': 'Unauthorized: Missing mandatory authentication headers'}));
           await response.close();
           return;
         }
 
+        // 2. Session existence and expiry
         final session = _activeSessions[sessionId];
         if (session == null || DateTime.now().millisecondsSinceEpoch > (session['expiresAt'] as int)) {
           response.statusCode = HttpStatus.unauthorized;
@@ -354,7 +581,7 @@ class LanSyncService {
           return;
         }
 
-        // Session binding check: claimed peer ID must match paired peer ID
+        // 3. Cryptographic peer identity binding
         if (session['peerId'] != claimedPeerId) {
           response.statusCode = HttpStatus.forbidden;
           response.headers.contentType = ContentType.json;
@@ -363,8 +590,9 @@ class LanSyncService {
           return;
         }
 
-        // Verify session token
-        if (session['sessionToken'] != sessionToken) {
+        // 4. Session token verification
+        final expectedToken = session['sessionToken'] as String;
+        if (!timingSafeEquals(utf8.encode(sessionToken), utf8.encode(expectedToken))) {
           response.statusCode = HttpStatus.unauthorized;
           response.headers.contentType = ContentType.json;
           response.write(json.encode({'error': 'Unauthorized: Invalid session token'}));
@@ -372,31 +600,28 @@ class LanSyncService {
           return;
         }
 
-        // Replay and clock skew verification
-        if (requestTimestamp != null) {
-          final reqTime = DateTime.tryParse(requestTimestamp)?.millisecondsSinceEpoch;
-          if (reqTime == null || (DateTime.now().millisecondsSinceEpoch - reqTime).abs() > maxTimestampSkewMs) {
-            response.statusCode = HttpStatus.badRequest;
-            response.headers.contentType = ContentType.json;
-            response.write(json.encode({'error': 'Request timestamp is invalid or exceeds maximum allowable clock skew'}));
-            await response.close();
-            return;
-          }
+        // 5. Clock skew verification (max 5 minutes)
+        final reqTime = DateTime.tryParse(requestTimestamp)?.millisecondsSinceEpoch;
+        if (reqTime == null || (DateTime.now().millisecondsSinceEpoch - reqTime).abs() > maxTimestampSkewMs) {
+          response.statusCode = HttpStatus.badRequest;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Bad Request: Request timestamp is invalid or exceeds maximum allowable clock skew (5 min)'}));
+          await response.close();
+          return;
         }
 
-        if (requestNonce != null) {
-          final seenNonces = session['seenNonces'] as Set<String>;
-          if (seenNonces.contains(requestNonce)) {
-            response.statusCode = HttpStatus.conflict;
-            response.headers.contentType = ContentType.json;
-            response.write(json.encode({'error': 'Conflict: Replayed request nonce detected'}));
-            await response.close();
-            return;
-          }
-          seenNonces.add(requestNonce);
-          if (seenNonces.length > 1000) {
-            seenNonces.remove(seenNonces.first);
-          }
+        // 6. Anti-replay nonce verification
+        final seenNonces = session['seenNonces'] as Set<String>;
+        if (seenNonces.contains(requestNonce)) {
+          response.statusCode = HttpStatus.conflict;
+          response.headers.contentType = ContentType.json;
+          response.write(json.encode({'error': 'Conflict: Replayed request nonce detected'}));
+          await response.close();
+          return;
+        }
+        seenNonces.add(requestNonce);
+        if (seenNonces.length > 2000) {
+          seenNonces.remove(seenNonces.first);
         }
       }
 
@@ -439,87 +664,47 @@ class LanSyncService {
           return;
         }
 
-        // P0-3: Strict durable acknowledgement semantics
-        final acknowledgedEventIds = <String>[];
-        final validEvents = <PeerScribeEvent>[];
-        int duplicateCount = 0;
+        // Ingest bundle returning explicit durable result
+        final ingestResult = await _syncManager.ingestBundle(incomingBundle);
+        _rejectedEventsLog.addAll(ingestResult.rejectedEvents);
 
-        for (final evt in incomingBundle.events) {
-          // Rule 1: Validate schema before acceptance
-          if (evt.schemaVersion != 1 || evt.eventId.isEmpty || evt.entityId.isEmpty || evt.eventType.isEmpty || evt.occurredAtUtc.isEmpty) {
-            _rejectedEventsLog.add({
-              'event_id': evt.eventId,
-              'reason': 'Schema validation failed (missing mandatory fields or invalid schema_version)',
-              'rejected_at_utc': DateTime.now().toUtc().toIso8601String(),
-            });
-            continue; // Rule 3: Rejected events are NOT acknowledged!
-          }
+        // Strict Invariant: Acknowledgements accumulated ONLY from verified durable entries
+        final acknowledgedEventIds = [
+          ...ingestResult.acceptedEventIds,
+          ...ingestResult.duplicateEventIds,
+        ];
 
-          // Rule 7: Duplicate valid events can be acknowledged after their existing durable copy is verified
-          final existing = await _db.getEventById(evt.eventId);
-          if (existing != null) {
-            duplicateCount++;
-            acknowledgedEventIds.add(evt.eventId);
-            continue;
-          }
+        // Prepare server outbox delta for return to peer
+        final allOutbox = await _db.getOutbox();
+        final serverOutbox = allOutbox.where((e) => e.actorId != claimedPeerId).toList();
 
-          validEvents.add(evt);
+        // Anti-forgery tracking: Record all outbox event IDs transmitted to this session
+        final transmitted = session['transmittedOutboxEventIds'] as Set<String>;
+        for (final evt in serverOutbox) {
+          transmitted.add(evt.eventId);
         }
 
-        // Rule 2 & 4: Durable persistence required before acknowledgement
-        int insertedCount = 0;
-        int divergencesCount = 0;
-        if (validEvents.isNotEmpty) {
-          try {
-            final validBundle = PeerScribeSyncBundle(
-              schemaVersion: incomingBundle.schemaVersion,
-              bundleId: incomingBundle.bundleId,
-              operationId: incomingBundle.operationId,
-              originNodeId: incomingBundle.originNodeId,
-              priority: incomingBundle.priority,
-              createdAtUtc: incomingBundle.createdAtUtc,
-              vectorClock: incomingBundle.vectorClock,
-              events: validEvents,
-            );
-            final ingestResult = await _syncManager.ingestBundle(validBundle);
-            insertedCount = ingestResult['inserted_events'] as int? ?? 0;
-            divergencesCount = ingestResult['divergences_flagged'] as int? ?? 0;
+        final responseBundle = PeerScribeSyncBundle(
+          schemaVersion: 1,
+          bundleId: 'bundle_${_uuid.v4()}',
+          operationId: (await _db.getActiveOperation())['operation_id'] as String? ?? 'OP_TACTICAL',
+          originNodeId: _nodeId,
+          priority: 'CLINICAL_DELTA',
+          createdAtUtc: DateTime.now().toUtc().toIso8601String(),
+          vectorClock: const {},
+          events: serverOutbox,
+        );
 
-            for (final evt in validEvents) {
-              acknowledgedEventIds.add(evt.eventId);
-            }
-          } catch (dbErr) {
-            // Rule 4: Database failure results in NO successful acknowledgement for affected events
-            _rejectedEventsLog.add({
-              'event_id': 'batch_persistence_error',
-              'reason': 'Database persistence error: $dbErr',
-              'rejected_at_utc': DateTime.now().toUtc().toIso8601String(),
-            });
-          }
-        }
-
-        // Prepare local outbox delta bundle to return to peer
-        final localOutboxBundle = await _syncManager.createOutboxBundle(localNodeId: _nodeId);
-        final encryptedServerBundle = await encryptPayload(localOutboxBundle.toMap(), sessionKey);
-
-        // Track peer connection
-        final remoteIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
-        _pairedPeers[remoteIp] = {
-          'peerId': incomingBundle.originNodeId,
-          'host': remoteIp,
-          'status': 'CONNECTED',
-          'lastSyncAt': DateTime.now().toUtc().toIso8601String(),
-        };
-        _syncManager.updatePeerCount(_pairedPeers.length);
+        final encryptedServerBundle = await encryptPayload(responseBundle.toMap(), sessionKey);
 
         response.statusCode = HttpStatus.ok;
         response.headers.contentType = ContentType.json;
         response.write(json.encode({
           'status': 'SUCCESS',
           'acknowledged_event_ids': acknowledgedEventIds,
-          'inserted_count': insertedCount,
-          'duplicate_count': duplicateCount,
-          'divergences_count': divergencesCount,
+          'inserted_count': ingestResult.acceptedEventIds.length,
+          'duplicate_count': ingestResult.duplicateEventIds.length,
+          'divergences_count': ingestResult.divergencesFlagged,
           'encrypted_server_bundle': encryptedServerBundle,
         }));
         await response.close();
@@ -528,16 +713,31 @@ class LanSyncService {
 
       // -----------------------------------------------------------------
       // Route: POST /api/v1/sync/ack
-      // Authenticated outbox acknowledgement
+      // Authenticated outbox acknowledgement with anti-forgery validation
       // -----------------------------------------------------------------
       if (path == '/api/v1/sync/ack' && request.method == 'POST') {
-        final acked = (jsonBody['acknowledged_event_ids'] as List?)?.cast<String>() ?? [];
-        if (acked.isNotEmpty) {
-          await _db.acknowledgeOutboxEvents(acked);
+        final session = _activeSessions[sessionId!]!;
+        final ackedIds = (jsonBody['acknowledged_event_ids'] as List?)?.cast<String>() ?? [];
+
+        // Anti-forgery: Only remove events that were ACTUALLY transmitted to this peer in this session!
+        final transmitted = session['transmittedOutboxEventIds'] as Set<String>;
+        final verifiedAcks = ackedIds.where((id) => transmitted.contains(id)).toList();
+
+        if (verifiedAcks.isNotEmpty) {
+          await _db.acknowledgeOutboxEvents(verifiedAcks);
+          for (final id in verifiedAcks) {
+            transmitted.remove(id);
+          }
         }
+
+        final forgedCount = ackedIds.length - verifiedAcks.length;
         response.statusCode = HttpStatus.ok;
         response.headers.contentType = ContentType.json;
-        response.write(json.encode({'success': true, 'acknowledged': acked.length}));
+        response.write(json.encode({
+          'success': true,
+          'acknowledged': verifiedAcks.length,
+          'rejected_forged': forgedCount,
+        }));
         await response.close();
         return;
       }
@@ -546,73 +746,124 @@ class LanSyncService {
       response.headers.contentType = ContentType.json;
       response.write(json.encode({'error': 'Not found: $path'}));
       await response.close();
-    } catch (err) {
+    } catch (e) {
       response.statusCode = HttpStatus.internalServerError;
       response.headers.contentType = ContentType.json;
-      response.write(json.encode({'error': err.toString()}));
+      response.write(json.encode({'error': e.toString()}));
       await response.close();
     }
   }
 
-  /// Pairs with a remote peer node using pairing PIN handshake.
+  /// Pairs with a remote peer using the authenticated Diffie-Hellman handshake.
+  /// Transmits ephemeral public keys; the pairing PIN is NEVER sent over the wire!
   Future<Map<String, dynamic>> pairWithPeer(String peerAddress, String pairingPin) async {
     String cleanAddress = peerAddress.trim();
     if (!cleanAddress.startsWith('http://') && !cleanAddress.startsWith('https://')) {
       cleanAddress = 'http://$cleanAddress';
     }
 
-    final clientNonceBytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
-    final clientNonce = base64.encode(clientNonceBytes);
-
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+
     try {
-      final pairUri = Uri.parse('$cleanAddress/api/v1/sync/pair');
-      final req = await client.postUrl(pairUri);
-      req.headers.contentType = ContentType.json;
-      req.write(json.encode({
+      final clientEphemeral = await _x25519.newKeyPair();
+      final clientPub = await clientEphemeral.extractPublicKey();
+      final clientNonceBytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+
+      // Step 1: POST /api/v1/sync/pair-init
+      final initUri = Uri.parse('$cleanAddress/api/v1/sync/pair-init');
+      final initReq = await client.postUrl(initUri);
+      initReq.headers.contentType = ContentType.json;
+
+      final initBody = json.encode({
         'client_node_id': _nodeId,
-        'pairing_pin': pairingPin.trim(),
-        'client_nonce': clientNonce,
-      }));
+        'client_ephemeral_pub': base64.encode(clientPub.bytes),
+        'client_nonce': base64.encode(clientNonceBytes),
+      });
+      initReq.write(initBody);
 
-      final res = await req.close().timeout(const Duration(seconds: 5));
-      final respBody = await utf8.decodeStream(res);
+      final initResp = await initReq.close().timeout(const Duration(seconds: 5));
+      final initRespBody = await utf8.decodeStream(initResp);
 
-      if (res.statusCode != HttpStatus.ok) {
-        throw HttpException('Pairing failed with HTTP ${res.statusCode}: $respBody');
+      if (initResp.statusCode != HttpStatus.ok) {
+        throw HttpException('Handshake init failed with HTTP ${initResp.statusCode}: $initRespBody');
       }
 
-      final data = json.decode(respBody) as Map<String, dynamic>;
-      final derived = deriveSessionKeys(
-        pairingPin: pairingPin.trim(),
-        clientNonceBase64: clientNonce,
-        serverNonceBase64: data['server_nonce'] as String,
+      final initData = json.decode(initRespBody) as Map<String, dynamic>;
+      final serverPubBytes = base64.decode(initData['server_ephemeral_pub'] as String);
+      final serverNonceBytes = base64.decode(initData['server_nonce'] as String);
+      final handshakeId = initData['handshake_id'] as String;
+      final serverNodeId = initData['server_node_id'] as String;
+
+      // Step 2: Compute shared secret and derive keys
+      final remotePubKey = crypto_pkg.SimplePublicKey(serverPubBytes, type: crypto_pkg.KeyPairType.x25519);
+      final sharedSecretKey = await _x25519.sharedSecretKey(keyPair: clientEphemeral, remotePublicKey: remotePubKey);
+      final sharedDH = await sharedSecretKey.extractBytes();
+
+      final derived = deriveHandshakeKeys(
+        sharedDH: sharedDH,
+        clientNonce: clientNonceBytes,
+        serverNonce: serverNonceBytes,
         clientNodeId: _nodeId,
-        serverNodeId: data['server_node_id'] as String,
+        serverNodeId: serverNodeId,
+        pairingPin: pairingPin,
       );
 
+      final confirmKey = derived['confirmKey'] as List<int>;
+      final clientProof = computeAuthProof(confirmKey, 'CLIENT-PROOF', handshakeId, _nodeId, serverNodeId);
+
+      // Step 3: POST /api/v1/sync/pair-confirm
+      final confirmUri = Uri.parse('$cleanAddress/api/v1/sync/pair-confirm');
+      final confirmReq = await client.postUrl(confirmUri);
+      confirmReq.headers.contentType = ContentType.json;
+
+      final confirmBody = json.encode({
+        'handshake_id': handshakeId,
+        'client_node_id': _nodeId,
+        'client_proof': base64.encode(clientProof),
+      });
+      confirmReq.write(confirmBody);
+
+      final confirmResp = await confirmReq.close().timeout(const Duration(seconds: 5));
+      final confirmRespBody = await utf8.decodeStream(confirmResp);
+
+      if (confirmResp.statusCode != HttpStatus.ok) {
+        throw HttpException('Handshake confirm failed with HTTP ${confirmResp.statusCode}: $confirmRespBody');
+      }
+
+      final confirmData = json.decode(confirmRespBody) as Map<String, dynamic>;
+      final expectedServerProof = computeAuthProof(confirmKey, 'SERVER-PROOF', handshakeId, serverNodeId, _nodeId);
+      final serverProof = base64.decode(confirmData['server_proof'] as String);
+
+      if (!timingSafeEquals(serverProof, expectedServerProof)) {
+        throw const HttpException('Peer identity verification failed: Server authentication proof mismatch');
+      }
+
       final sessionCreds = {
-        'sessionId': data['session_id'] as String,
-        'sessionToken': base64.encode(derived['sessionToken']!),
-        'sessionKey': derived['sessionKey']!,
-        'serverNodeId': data['server_node_id'] as String,
+        'sessionId': confirmData['session_id'],
+        'sessionToken': base64.encode(derived['sessionToken'] as List<int>),
+        'sessionKey': derived['sessionKey'] as List<int>,
+        'serverNodeId': serverNodeId,
         'peerAddress': cleanAddress,
         'pairedAt': DateTime.now().millisecondsSinceEpoch,
+        'sas': derived['sas'],
       };
 
       _clientSessions[cleanAddress] = sessionCreds;
-      _clientSessions[data['server_node_id'] as String] = sessionCreds;
+      _clientSessions[serverNodeId] = sessionCreds;
+      _pairedPeers[cleanAddress] = {
+        'host': cleanAddress,
+        'status': 'PAIRED',
+        'lastSyncAt': DateTime.now().toUtc().toIso8601String(),
+      };
+
       return sessionCreds;
     } finally {
       client.close();
     }
   }
 
-  /// Synchronizes bidirectionally with a peer node over an authenticated, encrypted session.
-  Future<LanSyncResult> syncWithPeer(
-    String peerAddress, {
-    String? pairingPin,
-  }) async {
+  /// Synchronizes bidirectionally with a peer over an authenticated, encrypted session.
+  Future<LanSyncResult> syncWithPeer(String peerAddress, {String? pairingPin}) async {
     String cleanAddress = peerAddress.trim();
     if (!cleanAddress.startsWith('http://') && !cleanAddress.startsWith('https://')) {
       cleanAddress = 'http://$cleanAddress';
@@ -630,11 +881,11 @@ class LanSyncService {
       }
       try {
         session = await pairWithPeer(cleanAddress, pairingPin);
-      } catch (err) {
+      } catch (e) {
         return LanSyncResult(
           success: false,
           peerAddress: cleanAddress,
-          errorMessage: 'Pairing handshake failed: $err',
+          errorMessage: 'Pairing failed: $e',
           timestamp: DateTime.now().toUtc().toIso8601String(),
         );
       }
@@ -651,7 +902,6 @@ class LanSyncService {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
 
     try {
-      // Encrypt bundle payload in transit
       final encryptedPayload = await encryptPayload(outboxBundle.toMap(), sessionKey);
       final nonceBytes = List<int>.generate(16, (_) => Random.secure().nextInt(256));
       final nonce = base64.encode(nonceBytes);
@@ -677,7 +927,6 @@ class LanSyncService {
 
       if (response.statusCode != HttpStatus.ok) {
         final errorText = await utf8.decodeStream(response);
-        // P0-3: Network or server error -> outbox NOT cleared, attempt logged
         await _db.markOutboxAttemptFailed(outboxEventIds, reason: 'HTTP ${response.statusCode}');
         _pairedPeers[cleanAddress] = {
           'host': cleanAddress,
@@ -695,7 +944,7 @@ class LanSyncService {
       final responseBody = await utf8.decodeStream(response);
       final respData = json.decode(responseBody) as Map<String, dynamic>;
 
-      // P0-3 Rule 5 & 6: Only remove outbox events that were actually acknowledged and sent in this bundle
+      // Strict Invariant: Only remove outbox events that were sent in this bundle AND confirmed by receiver
       final returnedAcks = (respData['acknowledged_event_ids'] as List?)?.cast<String>() ?? [];
       final verifiedAcks = returnedAcks.where((id) => outboxEventIds.contains(id)).toList();
       if (verifiedAcks.isNotEmpty) {
@@ -711,36 +960,18 @@ class LanSyncService {
         final decryptedObj = await decryptPayload(peerEncrypted, sessionKey);
         final inboundBundle = PeerScribeSyncBundle.fromMap(decryptedObj as Map<String, dynamic>);
 
-        final acceptedByClient = <String>[];
-        final validInboundEvents = <PeerScribeEvent>[];
+        final inboundResult = await _syncManager.ingestBundle(inboundBundle);
+        inboundCount = inboundResult.acceptedEventIds.length;
+        divergencesFlagged = inboundResult.divergencesFlagged;
+        _rejectedEventsLog.addAll(inboundResult.rejectedEvents);
 
-        for (final evt in inboundBundle.events) {
-          if (evt.schemaVersion == 1 && evt.eventId.isNotEmpty && evt.entityId.isNotEmpty && evt.eventType.isNotEmpty) {
-            validInboundEvents.add(evt);
-          }
-        }
+        // Send authenticated acknowledgement back to peer ONLY for durably accepted or duplicate events
+        final clientAcks = [
+          ...inboundResult.acceptedEventIds,
+          ...inboundResult.duplicateEventIds,
+        ];
 
-        if (validInboundEvents.isNotEmpty) {
-          final validBundle = PeerScribeSyncBundle(
-            schemaVersion: inboundBundle.schemaVersion,
-            bundleId: inboundBundle.bundleId,
-            operationId: inboundBundle.operationId,
-            originNodeId: inboundBundle.originNodeId,
-            priority: inboundBundle.priority,
-            createdAtUtc: inboundBundle.createdAtUtc,
-            vectorClock: inboundBundle.vectorClock,
-            events: validInboundEvents,
-          );
-          final ingestResult = await _syncManager.ingestBundle(validBundle);
-          inboundCount = ingestResult['inserted_events'] as int? ?? 0;
-          divergencesFlagged = ingestResult['divergences_flagged'] as int? ?? 0;
-          for (final evt in validInboundEvents) {
-            acceptedByClient.add(evt.eventId);
-          }
-        }
-
-        // Send authenticated acknowledgement back to peer for accepted events
-        if (acceptedByClient.isNotEmpty) {
+        if (clientAcks.isNotEmpty) {
           try {
             final ackUri = Uri.parse('$cleanAddress/api/v1/sync/ack');
             final ackReq = await client.postUrl(ackUri);
@@ -751,21 +982,17 @@ class LanSyncService {
             ackReq.headers.set('X-PeerScribe-Peer-Id', _nodeId);
             ackReq.headers.set('X-PeerScribe-Nonce', ackNonce);
             ackReq.headers.set('X-PeerScribe-Timestamp', DateTime.now().toUtc().toIso8601String());
-            ackReq.write(json.encode({'acknowledged_event_ids': acceptedByClient}));
+            ackReq.write(json.encode({'acknowledged_event_ids': clientAcks}));
             await ackReq.close();
           } catch (_) {}
         }
       }
 
-      // Update peer status tracking
       _pairedPeers[cleanAddress] = {
         'host': cleanAddress,
-        'status': 'CONNECTED',
+        'status': 'SYNCED',
         'lastSyncAt': DateTime.now().toUtc().toIso8601String(),
-        'eventsSent': outboxEvents.length,
-        'eventsReceived': inboundCount,
       };
-      _syncManager.updatePeerCount(_pairedPeers.length);
 
       return LanSyncResult(
         success: true,
@@ -775,30 +1002,11 @@ class LanSyncService {
         divergencesFlagged: divergencesFlagged,
         timestamp: DateTime.now().toUtc().toIso8601String(),
       );
-    } on SocketException catch (err) {
-      await _db.markOutboxAttemptFailed(outboxEventIds, reason: err.message);
-      _pairedPeers[cleanAddress] = {'host': cleanAddress, 'status': 'UNREACHABLE'};
+    } catch (e) {
       return LanSyncResult(
         success: false,
         peerAddress: cleanAddress,
-        errorMessage: 'Network connection refused or host unreachable at $cleanAddress: ${err.message}',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
-      );
-    } on TimeoutException {
-      await _db.markOutboxAttemptFailed(outboxEventIds, reason: 'Timeout');
-      _pairedPeers[cleanAddress] = {'host': cleanAddress, 'status': 'TIMEOUT'};
-      return LanSyncResult(
-        success: false,
-        peerAddress: cleanAddress,
-        errorMessage: 'Sync timeout connecting to $cleanAddress after 6 seconds.',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
-      );
-    } catch (err) {
-      await _db.markOutboxAttemptFailed(outboxEventIds, reason: err.toString());
-      return LanSyncResult(
-        success: false,
-        peerAddress: cleanAddress,
-        errorMessage: 'LAN sync failed: $err',
+        errorMessage: e.toString(),
         timestamp: DateTime.now().toUtc().toIso8601String(),
       );
     } finally {
@@ -806,7 +1014,6 @@ class LanSyncService {
     }
   }
 
-  /// Closes the embedded HTTP listener.
   Future<void> stopServer() async {
     if (_server != null) {
       await _server!.close(force: true);

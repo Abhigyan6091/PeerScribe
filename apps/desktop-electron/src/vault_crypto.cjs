@@ -22,7 +22,12 @@ class VaultDecryptionError extends Error {
  */
 function getOrCreateVaultKey(keyFilePath, options = {}) {
   const safeStorage = options.safeStorage;
-  const isEncryptionAvailable = safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable();
+  const isEncryptionAvailable = Boolean(safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable());
+  const isTestEnvironment = process.env.NODE_ENV === 'test' || options.allowInsecureFallback === true;
+
+  if (!isEncryptionAvailable && !isTestEnvironment) {
+    throw new Error('Security Violation: Electron safeStorage (Windows DPAPI) is unavailable. Refusing silent security downgrade to raw-key file storage in production.');
+  }
 
   if (fs.existsSync(keyFilePath)) {
     const rawBuffer = fs.readFileSync(keyFilePath);
@@ -34,7 +39,7 @@ function getOrCreateVaultKey(keyFilePath, options = {}) {
         throw new VaultDecryptionError(`Failed to decrypt DPAPI vault key: ${err.message}`);
       }
     } else {
-      // Direct raw key storage for test / CLI environments
+      // Direct raw key storage permitted ONLY for test / CLI environments
       const content = rawBuffer.toString('utf8').trim();
       return Buffer.from(content, 'hex');
     }
@@ -53,6 +58,7 @@ function getOrCreateVaultKey(keyFilePath, options = {}) {
     const encryptedKey = safeStorage.encryptString(keyHex);
     fs.writeFileSync(keyFilePath, encryptedKey);
   } else {
+    // Permitted only in explicit test environments
     fs.writeFileSync(keyFilePath, keyHex, { mode: 0o600 });
   }
 

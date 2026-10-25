@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { LanSyncService, DEFAULT_SYNC_PORT } = require('./lan_sync.cjs');
 const { getOrCreateVaultKey, encryptVault, decryptVault } = require('./vault_crypto.cjs');
+const { TacticalStorageEngine } = require('./persistence_store.cjs');
 
 // Tactical Node Identity & Local Store
 let mainWindow = null;
@@ -20,17 +21,17 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const EVENTS_FILE = path.join(DATA_DIR, 'immutable_events.jsonl');
 const VAULT_FILE = path.join(DATA_DIR, 'personal_vault.enc');
 const KEY_FILE = path.join(DATA_DIR, 'vault.key');
-const OUTBOX_FILE = path.join(DATA_DIR, 'sync_outbox.json');
 
-// In-memory projections and indexes
-let eventsLog = [];
+// Crash-Consistent Persistence Engine
+const storageEngine = new TacticalStorageEngine(DATA_DIR);
+
+// In-memory clinical projection
 let projectedPatients = new Map();
-let outboxQueue = [];
 
-// Unconfigured blank personal vault with zero fabricated default data
+// Personal vault state: UNCONFIGURED | DECRYPTED | KEY_UNAVAILABLE | CORRUPTED
+let vaultState = 'UNCONFIGURED';
 let personalVault = {
   is_configured: false,
   is_synthetic_demo: false,
@@ -54,39 +55,42 @@ function encryptVaultData(data) {
 }
 
 function decryptVaultData(raw) {
-  try {
-    return decryptVault(raw, getVaultKey());
-  } catch (err) {
-    console.warn('[PersonalVault] Could not decrypt vault, starting blank:', err.message);
-    return null;
+  return decryptVault(raw, getVaultKey());
+}
+
+function loadPersistedVault() {
+  if (fs.existsSync(VAULT_FILE)) {
+    try {
+      const raw = fs.readFileSync(VAULT_FILE, 'utf8');
+      const decrypted = decryptVaultData(raw);
+      if (decrypted) {
+        personalVault = decrypted;
+        vaultState = 'DECRYPTED';
+      } else {
+        vaultState = 'CORRUPTED';
+      }
+    } catch (err) {
+      console.error('[PersonalVault] Failed to decrypt existing vault:', err.message);
+      vaultState = 'CORRUPTED';
+    }
+  } else {
+    vaultState = 'UNCONFIGURED';
   }
 }
 
 // Initialize persistence
 function loadPersistedState() {
   try {
-    if (fs.existsSync(VAULT_FILE)) {
-      const decrypted = decryptVaultData(fs.readFileSync(VAULT_FILE, 'utf8'));
-      if (decrypted) personalVault = decrypted;
-    }
-    if (fs.existsSync(OUTBOX_FILE)) {
-      outboxQueue = JSON.parse(fs.readFileSync(OUTBOX_FILE, 'utf8'));
-    }
-    if (fs.existsSync(EVENTS_FILE)) {
-      const lines = fs.readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean);
-      eventsLog = lines.map(l => JSON.parse(l));
-      reprojectAllPatients();
-    }
+    loadPersistedVault();
+    storageEngine.recoverState();
+    reprojectAllPatients();
   } catch (err) {
     console.error('Error loading persisted tactical state:', err);
   }
 }
 
 function persistEvent(event) {
-  eventsLog.push(event);
-  fs.appendFileSync(EVENTS_FILE, JSON.stringify(event) + '\n', 'utf8');
-  outboxQueue.push(event);
-  fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
+  storageEngine.persistEvent(event);
   projectEvent(event);
 }
 
@@ -160,43 +164,42 @@ function projectEvent(event) {
 
 function reprojectAllPatients() {
   projectedPatients.clear();
-  eventsLog.forEach(projectEvent);
+  for (const event of storageEngine.eventsLog) {
+    projectEvent(event);
+  }
 }
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: 1280,
+    height: 850,
     minWidth: 1024,
     minHeight: 700,
-    backgroundColor: '#05070a',
-    title: 'PeerScribe Tactical Clinical Mesh',
+    backgroundColor: '#0a0d14',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
       nodeIntegration: false,
+      contextIsolation: true,
       sandbox: true
     }
   });
 
-  // Strict Content Security Policy
+  // Strict CSP Header
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:;"
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: http: https:;"
         ]
       }
     });
   });
 
-  // Load renderer index.html
-  const rendererPath = path.join(__dirname, '..', 'renderer', 'index.html');
-  if (fs.existsSync(rendererPath)) {
-    mainWindow.loadFile(rendererPath);
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
   } else {
-    // Fallback to packages/ui-app/index.html in monorepo development
     const devPath = path.resolve(__dirname, '..', '..', '..', 'packages', 'ui-app', 'index.html');
     mainWindow.loadFile(devPath);
   }
@@ -212,8 +215,8 @@ function setupIpcHandlers() {
     return {
       mode: appMode,
       activeOperation,
-      outboxCount: outboxQueue.length,
-      eventsCount: eventsLog.length,
+      outboxCount: storageEngine.outboxQueue.length,
+      eventsCount: storageEngine.eventsLog.length,
       patientsCount: projectedPatients.size,
       divergencesCount: Array.from(projectedPatients.values())
         .flatMap(p => p.divergence_flags)
@@ -228,11 +231,8 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('system:wipe-data', () => {
-    eventsLog = [];
-    outboxQueue = [];
+    storageEngine.wipeOperationalData();
     projectedPatients.clear();
-    if (fs.existsSync(EVENTS_FILE)) fs.unlinkSync(EVENTS_FILE);
-    if (fs.existsSync(OUTBOX_FILE)) fs.unlinkSync(OUTBOX_FILE);
     return { success: true };
   });
 
@@ -261,8 +261,8 @@ function setupIpcHandlers() {
       entity_id: patientId,
       event_type: 'PATIENT_CREATED',
       actor_id: 'node_desktop_electron',
-      actor_sequence: eventsLog.length + 1,
-      lamport_timestamp: eventsLog.length + 1,
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
       occurred_at_utc: new Date().toISOString(),
       payload: {
         ephemeral_id: payload.ephemeral_id || `TAG-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -284,8 +284,8 @@ function setupIpcHandlers() {
       entity_id: patientId,
       event_type: 'TRIAGE_STATUS_CHANGED',
       actor_id: 'node_desktop_electron',
-      actor_sequence: eventsLog.length + 1,
-      lamport_timestamp: eventsLog.length + 1,
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
       occurred_at_utc: new Date().toISOString(),
       payload: {
         triage_category: category,
@@ -298,6 +298,9 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('clinical:record-vitals', (event, { patientId, vitals }) => {
+    const patient = projectedPatients.get(patientId);
+    if (!patient) throw new Error('Patient not found');
+
     const vitalsEvent = {
       schema_version: 1,
       event_id: `evt_${crypto.randomUUID()}`,
@@ -305,16 +308,49 @@ function setupIpcHandlers() {
       entity_id: patientId,
       event_type: 'VITALS_RECORDED',
       actor_id: 'node_desktop_electron',
-      actor_sequence: eventsLog.length + 1,
-      lamport_timestamp: eventsLog.length + 1,
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
       occurred_at_utc: new Date().toISOString(),
-      payload: vitals
+      payload: {
+        heart_rate: vitals.heart_rate,
+        respiratory_rate: vitals.respiratory_rate,
+        systolic_bp: vitals.systolic_bp,
+        spo2: vitals.spo2,
+        avpu_scale: vitals.avpu_scale || 'ALERT'
+      }
     };
     persistEvent(vitalsEvent);
     return projectedPatients.get(patientId);
   });
 
+  ipcMain.handle('clinical:record-injury', (event, { patientId, injury }) => {
+    const patient = projectedPatients.get(patientId);
+    if (!patient) throw new Error('Patient not found');
+
+    const injuryEvent = {
+      schema_version: 1,
+      event_id: `evt_${crypto.randomUUID()}`,
+      operation_id: activeOperation.operation_id,
+      entity_id: patientId,
+      event_type: 'INJURY_RECORDED',
+      actor_id: 'node_desktop_electron',
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
+      occurred_at_utc: new Date().toISOString(),
+      payload: {
+        body_part: injury.body_part,
+        injury_type: injury.injury_type,
+        severity: injury.severity || 'MODERATE'
+      }
+    };
+    persistEvent(injuryEvent);
+    return projectedPatients.get(patientId);
+  });
+
   ipcMain.handle('clinical:resolve-divergence', (event, { patientId, flagId, category, note }) => {
+    const patient = projectedPatients.get(patientId);
+    if (!patient) throw new Error('Patient not found');
+
     const resolveEvent = {
       schema_version: 1,
       event_id: `evt_${crypto.randomUUID()}`,
@@ -322,8 +358,8 @@ function setupIpcHandlers() {
       entity_id: patientId,
       event_type: 'DIVERGENCE_RESOLVED',
       actor_id: 'node_desktop_electron',
-      actor_sequence: eventsLog.length + 1,
-      lamport_timestamp: eventsLog.length + 1,
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
       occurred_at_utc: new Date().toISOString(),
       payload: {
         flag_id: flagId,
@@ -340,50 +376,73 @@ function setupIpcHandlers() {
     port: 4323,
     nodeId: 'node_desktop_electron',
     getState: () => ({
-      eventsLog,
-      outboxQueue,
+      eventsLog: storageEngine.eventsLog,
+      outboxQueue: storageEngine.outboxQueue,
       activeOperation
     }),
     onEventsIngested: (newEvents) => {
-      let addedToOutbox = false;
       for (const evt of newEvents) {
-        eventsLog.push(evt);
-        fs.appendFileSync(EVENTS_FILE, JSON.stringify(evt) + '\n', 'utf8');
+        storageEngine.persistEvent(evt);
         projectEvent(evt);
-
-        // P1-5 Store-and-forward: Enqueue into outbox for propagation to other mesh peers
-        // Suppress duplicates if already in outbox. Personal profiles are never forwarded unless
-        // explicitly disclosed via VAULT_SNAPSHOT_ATTACHED.
-        const alreadyInOutbox = outboxQueue.some(e => e.event_id === evt.event_id);
-        if (!alreadyInOutbox) {
-          outboxQueue.push(evt);
-          addedToOutbox = true;
-        }
-      }
-      if (addedToOutbox) {
-        fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
       }
       if (mainWindow) {
         mainWindow.webContents.send('sync:event-received', { count: newEvents.length });
-        mainWindow.webContents.send('sync:status-updated', { outboxCount: outboxQueue.length });
+        mainWindow.webContents.send('sync:status-updated', { outboxCount: storageEngine.outboxQueue.length });
       }
       return 0;
     },
     onOutboxAcknowledged: (ackedIds) => {
-      outboxQueue = outboxQueue.filter(e => !ackedIds.includes(e.event_id));
-      fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxQueue, null, 2), 'utf8');
+      storageEngine.acknowledgeEvents(ackedIds);
       if (mainWindow) {
-        mainWindow.webContents.send('sync:status-updated', { outboxCount: outboxQueue.length });
+        mainWindow.webContents.send('sync:status-updated', { outboxCount: storageEngine.outboxQueue.length });
       }
     }
   });
 
-  ipcMain.handle('vault:get-profile', () => personalVault);
+  ipcMain.handle('vault:get-profile', () => {
+    if (vaultState === 'CORRUPTED') {
+      return {
+        error: 'VAULT_CORRUPTED',
+        message: 'Personal profile vault is corrupted or authentication tag mismatch. Existing data preserved.',
+        is_configured: true,
+        vaultState
+      };
+    }
+    if (vaultState === 'KEY_UNAVAILABLE') {
+      return {
+        error: 'KEY_UNAVAILABLE',
+        message: 'Platform secure storage key is unavailable. Profile data is preserved on disk.',
+        is_configured: true,
+        vaultState
+      };
+    }
+    return { ...personalVault, vaultState };
+  });
 
   ipcMain.handle('vault:save-profile', (event, profile) => {
+    if (vaultState === 'CORRUPTED' || vaultState === 'KEY_UNAVAILABLE') {
+      throw new Error(`Cannot save profile: Personal vault is in ${vaultState} state. Preserving existing encrypted data. An explicit reset is required.`);
+    }
     personalVault = { ...personalVault, ...profile, is_configured: true };
     fs.writeFileSync(VAULT_FILE, encryptVaultData(personalVault), 'utf8');
+    vaultState = 'DECRYPTED';
     return personalVault;
+  });
+
+  ipcMain.handle('vault:reset', () => {
+    if (fs.existsSync(VAULT_FILE)) {
+      fs.unlinkSync(VAULT_FILE);
+    }
+    personalVault = {
+      is_configured: false,
+      is_synthetic_demo: false,
+      blood_group: null,
+      allergies: [],
+      critical_conditions: [],
+      emergency_contacts: []
+    };
+    vaultState = 'UNCONFIGURED';
+    return { success: true };
   });
 
   ipcMain.handle('vault:load-demo', () => {
@@ -398,6 +457,7 @@ function setupIpcHandlers() {
       ]
     };
     fs.writeFileSync(VAULT_FILE, encryptVaultData(personalVault), 'utf8');
+    vaultState = 'DECRYPTED';
     return personalVault;
   });
 
@@ -412,8 +472,8 @@ function setupIpcHandlers() {
       entity_id: patientId,
       event_type: 'VAULT_SNAPSHOT_ATTACHED',
       actor_id: 'node_desktop_electron',
-      actor_sequence: eventsLog.length + 1,
-      lamport_timestamp: eventsLog.length + 1,
+      actor_sequence: storageEngine.eventsLog.length + 1,
+      lamport_timestamp: storageEngine.eventsLog.length + 1,
       occurred_at_utc: new Date().toISOString(),
       payload: {
         blood_group: personalVault.blood_group,
@@ -427,16 +487,16 @@ function setupIpcHandlers() {
     return projectedPatients.get(patientId);
   });
 
-  ipcMain.handle('sync:get-outbox', () => outboxQueue);
+  ipcMain.handle('sync:get-outbox', () => storageEngine.outboxQueue);
 
   ipcMain.handle('sync:get-lan-info', () => {
     return {
       nodeId: lanSync.nodeId,
       port: lanSync.port,
       ipAddresses: lanSync.getLocalIpAddresses(),
-      pairingPin: lanSync.pairingPin,
-      outboxCount: outboxQueue.length,
-      pairedPeersCount: lanSync.pairedPeers.size
+      pairingPin: lanSync.getPairingPin(),
+      outboxCount: storageEngine.outboxQueue.length,
+      pairedPeersCount: lanSync.activeSessions.size
     };
   });
 
@@ -445,36 +505,23 @@ function setupIpcHandlers() {
     return await lanSync.pairWithPeer(peerAddress, pairingPin);
   });
 
-  ipcMain.handle('sync:get-peers', () => lanSync.getPeersList());
+  ipcMain.handle('sync:get-peers', () => Array.from(lanSync.activeSessions.values()).map(s => ({
+    sessionId: s.sessionId,
+    peerId: s.peerId,
+    createdAt: s.createdAt,
+    expiresAt: s.expiresAt
+  })));
 
   ipcMain.handle('sync:trigger-lan', async (event, { peerAddress, pairingPin }) => {
-    if (!peerAddress) throw new Error('Peer address is required (e.g. 192.168.1.50:4322)');
     return await lanSync.syncWithPeer(peerAddress, pairingPin);
   });
 
-  // Delta & Differential In-App Update Handlers (Accurate real reporting)
-  ipcMain.handle('system:check-updates', async () => {
-    return {
-      currentVersion: '1.0.0',
-      updateAvailable: false,
-      channel: 'stable',
-      differential: true,
-      lastCheckedAt: new Date().toISOString(),
-      message: 'PeerScribe v1.0 is currently up to date. Differential blockmap updates active.'
-    };
-  });
-
-  ipcMain.handle('system:download-update', async () => {
-    return { success: false, message: 'No delta update package currently queued on release channel.' };
-  });
-
-  ipcMain.handle('system:apply-update', async () => {
-    return { success: false, message: 'No pending updates staged for application.' };
-  });
+  // Start LAN service
+  lanSync.startServer().catch(err => console.error('Failed to start LAN sync server:', err));
 }
 
-// App lifecycle
-app.whenReady().then(async () => {
+// App Lifecycle
+app.whenReady().then(() => {
   loadPersistedState();
   setupIpcHandlers();
   createWindow();
@@ -485,5 +532,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
 });

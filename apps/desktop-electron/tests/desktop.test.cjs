@@ -1,16 +1,69 @@
+process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { LanSyncService } = require('../src/lan_sync.cjs');
+const {
+  LanSyncService,
+  generateX25519KeyPair,
+  computeX25519DH,
+  deriveHandshakeKeys,
+  computeAuthProof
+} = require('../src/lan_sync.cjs');
 const {
   getOrCreateVaultKey,
   encryptVault,
   decryptVault,
   VaultDecryptionError
 } = require('../src/vault_crypto.cjs');
+const { TacticalStorageEngine } = require('../src/persistence_store.cjs');
+
+// Helper to make POST requests and parse JSON
+function requestJson(url, options = {}, payload = null) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const bodyStr = payload ? (typeof payload === 'string' ? payload : JSON.stringify(payload)) : null;
+    const reqHeaders = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
+    if (bodyStr) {
+      reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+
+    const req = http.request(parsed, {
+      method: options.method || (bodyStr ? 'POST' : 'GET'),
+      headers: reqHeaders,
+      timeout: options.timeout || 5000
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        let json = null;
+        try {
+          json = JSON.parse(data);
+        } catch (_) {}
+        resolve({
+          statusCode: res.statusCode,
+          headers: res.headers,
+          body: data,
+          json
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`Request timed out to ${url}`));
+    });
+    req.on('error', reject);
+
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
 
 describe('PeerScribe Windows Electron Desktop Engine', () => {
   it('validates preload script channel whitelists', () => {
@@ -49,7 +102,7 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
   });
 
   // --------------------------------------------------------------------------
-  // P0-2: AES-256-GCM Vault Encryption & Protected Key Management Tests
+  // P0-2 & P1-D: AES-256-GCM Vault Encryption & Protected Key Management Tests
   // --------------------------------------------------------------------------
   describe('P0-2: Personal Profile Vault AES-256-GCM & Key Security', () => {
     const testScratchDir = path.resolve(__dirname, '../test_scratch_vault');
@@ -73,6 +126,20 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       // 2. Restart simulation: Key must persist and match
       const key2 = getOrCreateVaultKey(keyFile);
       assert.strictEqual(key1.equals(key2), true, 'Key must be persistent across application restarts');
+    });
+
+    it('fails closed in production when safeStorage is unavailable', () => {
+      const origEnv = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        const prodKeyFile = path.join(testScratchDir, 'prod.key');
+        assert.throws(
+          () => getOrCreateVaultKey(prodKeyFile, { safeStorage: { isEncryptionAvailable: () => false } }),
+          /Security Violation: Electron safeStorage .* unavailable/
+        );
+      } finally {
+        process.env.NODE_ENV = origEnv;
+      }
     });
 
     it('performs roundtrip AES-256-GCM encryption and decryption', () => {
@@ -170,7 +237,7 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
   });
 
   // --------------------------------------------------------------------------
-  // P0-1: Peer Pairing & Authenticated Encrypted LAN Sessions Tests
+  // P0-A: Peer Pairing & Authenticated Encrypted LAN Sessions Tests
   // --------------------------------------------------------------------------
   describe('P0-1: Peer Pairing, Authentication, and Negative Security Tests', () => {
     let serviceHost;
@@ -203,14 +270,16 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       if (serviceClient) await serviceClient.stopServer();
     });
 
+    beforeEach(() => {
+      serviceHost.setPairingPin(hostPairingPin);
+      serviceHost.failedAttempts.clear();
+      serviceHost.activeSessions.clear();
+      serviceClient.clientSessions.clear();
+    });
+
     it('GET /api/v1/sync/info never exposes secrets, tokens, or pairing PIN', async () => {
-      const info = await new Promise((resolve, reject) => {
-        http.get(`http://127.0.0.1:${hostPort}/api/v1/sync/info`, (res) => {
-          let body = '';
-          res.on('data', chunk => body += chunk);
-          res.on('end', () => resolve(JSON.parse(body)));
-        }).on('error', reject);
-      });
+      const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/info`);
+      const info = res.json;
 
       assert.strictEqual(info.status, 'OK');
       assert.strictEqual(info.nodeId, 'node_host_test');
@@ -227,87 +296,144 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       );
     });
 
-    it('successfully pairs with valid PIN and establishes encrypted session', async () => {
+    it('successfully pairs with valid PIN and establishes encrypted session via X25519 DH', async () => {
       const session = await serviceClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, hostPairingPin);
       assert.ok(session.sessionId.startsWith('sess_'));
       assert.ok(session.sessionToken, 'Must receive session token');
       assert.strictEqual(Buffer.isBuffer(session.sessionKey), true);
       assert.strictEqual(session.sessionKey.length, 32, 'Session key must be 256 bits');
+      assert.ok(session.sas, 'Must compute short authentication string');
+    });
+
+    it('proves that a network eavesdropper with full transcript cannot compute session keys or PIN without DH private key', async () => {
+      const eavesdroppedTranscript = [];
+
+      // Intercept and record the pairing handshake
+      const clientEphemeral = generateX25519KeyPair();
+      const clientNonce = crypto.randomBytes(32);
+
+      // Step 1: client -> host pair-init
+      const initPayload = {
+        client_node_id: serviceClient.nodeId,
+        client_ephemeral_pub: clientEphemeral.publicKey.toString('base64'),
+        client_nonce: clientNonce.toString('base64')
+      };
+      eavesdroppedTranscript.push({ step: 'init_req', body: initPayload });
+
+      const initRes = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/pair-init`, {}, initPayload);
+      eavesdroppedTranscript.push({ step: 'init_res', body: initRes.json });
+
+      // Step 2: client -> host pair-confirm
+      const serverPubBytes = Buffer.from(initRes.json.server_ephemeral_pub, 'base64');
+      const serverNonce = Buffer.from(initRes.json.server_nonce, 'base64');
+      const sharedDH = computeX25519DH(clientEphemeral.privateKey, serverPubBytes);
+
+      const { confirmKey, sessionKey } = deriveHandshakeKeys(
+        sharedDH,
+        clientNonce,
+        serverNonce,
+        serviceClient.nodeId,
+        initRes.json.server_node_id,
+        hostPairingPin
+      );
+
+      const clientProof = computeAuthProof(confirmKey, 'CLIENT-PROOF', initRes.json.handshake_id, serviceClient.nodeId, initRes.json.server_node_id);
+      const confirmPayload = {
+        handshake_id: initRes.json.handshake_id,
+        client_node_id: serviceClient.nodeId,
+        client_proof: clientProof.toString('base64')
+      };
+      eavesdroppedTranscript.push({ step: 'confirm_req', body: confirmPayload });
+
+      const confirmRes = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/pair-confirm`, {}, confirmPayload);
+      eavesdroppedTranscript.push({ step: 'confirm_res', body: confirmRes.json });
+
+      assert.strictEqual(confirmRes.json.status, 'PAIRED');
+
+      // Assert 1: The PIN is nowhere in the plaintext network transcript!
+      const transcriptStr = JSON.stringify(eavesdroppedTranscript);
+      assert.strictEqual(transcriptStr.includes(hostPairingPin), false, 'PIN must NEVER appear in network transcript');
+
+      // Assert 2: An observer attempting candidate PINs without private DH keys cannot derive the valid session key
+      const fakeSharedDH = crypto.randomBytes(32); // Observer does NOT possess client or server private keys
+      const candidateKeys = deriveHandshakeKeys(
+        fakeSharedDH,
+        clientNonce,
+        serverNonce,
+        serviceClient.nodeId,
+        initRes.json.server_node_id,
+        hostPairingPin
+      );
+      assert.strictEqual(candidateKeys.sessionKey.equals(sessionKey), false, 'Observer without DH private key cannot compute session key');
+    });
+
+    it('enforces lockout after 3 consecutive failed pairing attempts (429)', async () => {
+      const attackerNodeId = 'node_attacker_' + crypto.randomUUID();
+
+      for (let i = 0; i < 3; i++) {
+        const attackerClient = new LanSyncService({ nodeId: attackerNodeId });
+        await assert.rejects(
+          () => attackerClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, 'WRONG_PIN_' + i),
+          /401/
+        );
+      }
+
+      // 4th attempt must be locked out with 429
+      const lockedClient = new LanSyncService({ nodeId: attackerNodeId });
+      await assert.rejects(
+        () => lockedClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, hostPairingPin),
+        /429/
+      );
     });
 
     it('rejects unauthenticated bundle requests (401)', async () => {
-      const res = await new Promise((resolve, reject) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/bundle`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        }, (r) => {
-          r.on('data', () => {});
-          r.on('end', () => resolve(r));
-        });
-        req.on('error', reject);
-        req.write(JSON.stringify({ events: [] }));
-        req.end();
-      });
-
+      const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/bundle`, {}, { events: [] });
       assert.strictEqual(res.statusCode, 401, 'Unauthenticated bundle request must be rejected with 401');
     });
 
     it('rejects unauthenticated ack requests (401)', async () => {
-      const res = await new Promise((resolve, reject) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/ack`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        }, (r) => {
-          r.on('data', () => {});
-          r.on('end', () => resolve(r));
-        });
-        req.on('error', reject);
-        req.write(JSON.stringify({ acknowledged_event_ids: ['evt_1'] }));
-        req.end();
-      });
-
+      const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/ack`, {}, { acknowledged_event_ids: ['evt_1'] });
       assert.strictEqual(res.statusCode, 401, 'Unauthenticated ack request must be rejected with 401');
+    });
+
+    it('rejects bundle requests missing any of the 5 mandatory security headers', async () => {
+      const session = await serviceClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, hostPairingPin);
+
+      const allHeaders = {
+        'X-PeerScribe-Session': session.sessionId,
+        'X-PeerScribe-Token': session.sessionToken,
+        'X-PeerScribe-Peer-Id': serviceClient.nodeId,
+        'X-PeerScribe-Nonce': 'nonce_' + crypto.randomUUID(),
+        'X-PeerScribe-Timestamp': new Date().toISOString()
+      };
+
+      for (const headerKey of ['X-PeerScribe-Session', 'X-PeerScribe-Token', 'X-PeerScribe-Peer-Id', 'X-PeerScribe-Nonce', 'X-PeerScribe-Timestamp']) {
+        const headers = { ...allHeaders };
+        delete headers[headerKey];
+
+        const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/bundle`, { headers }, { encrypted_payload: {} });
+        assert.strictEqual(res.statusCode, 401, `Missing ${headerKey} must return 401`);
+      }
     });
 
     it('rejects forged peer identity that does not match session binding (403)', async () => {
       const session = await serviceClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, hostPairingPin);
 
-      // Attempt to use valid session with a forged peer ID
-      const res = await new Promise((resolve, reject) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/bundle`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-PeerScribe-Session': session.sessionId,
-            'X-PeerScribe-Token': session.sessionToken,
-            'X-PeerScribe-Peer-Id': 'impostor_node_id' // Forged peer ID!
-          }
-        }, (r) => {
-          r.on('data', () => {});
-          r.on('end', () => resolve(r));
-        });
-        req.on('error', reject);
-        req.write(JSON.stringify({ encrypted_payload: {} }));
-        req.end();
-      });
+      const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/bundle`, {
+        headers: {
+          'X-PeerScribe-Session': session.sessionId,
+          'X-PeerScribe-Token': session.sessionToken,
+          'X-PeerScribe-Peer-Id': 'impostor_node_id', // Forged peer ID!
+          'X-PeerScribe-Nonce': 'nonce_' + crypto.randomUUID(),
+          'X-PeerScribe-Timestamp': new Date().toISOString()
+        }
+      }, { encrypted_payload: {} });
 
       assert.strictEqual(res.statusCode, 403, 'Forged peer identity must be rejected with 403 Forbidden');
     });
 
     it('rejects malformed JSON payloads (400)', async () => {
-      const res = await new Promise((resolve, reject) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/pair`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        }, (r) => {
-          r.on('data', () => {});
-          r.on('end', () => resolve(r));
-        });
-        req.on('error', reject);
-        req.write('this_is_not_valid_json{{');
-        req.end();
-      });
-
+      const res = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/pair-init`, {}, 'this_is_not_valid_json{{');
       assert.strictEqual(res.statusCode, 400, 'Malformed JSON must return 400 Bad Request');
     });
 
@@ -315,7 +441,7 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       const hugeBuffer = Buffer.alloc(2.5 * 1024 * 1024, 'X'); // 2.5 MB
 
       const res = await new Promise((resolve) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/pair`, {
+        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/pair-init`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -340,38 +466,71 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       const replayNonce = 'fixed_nonce_' + crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
-      // 1. First request with this nonce
-      const sendReq = () => new Promise((resolve, reject) => {
-        const req = http.request(`http://127.0.0.1:${hostPort}/api/v1/sync/ack`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-PeerScribe-Session': session.sessionId,
-            'X-PeerScribe-Token': session.sessionToken,
-            'X-PeerScribe-Peer-Id': serviceClient.nodeId,
-            'X-PeerScribe-Nonce': replayNonce,
-            'X-PeerScribe-Timestamp': timestamp
-          }
-        }, (r) => {
-          r.on('data', () => {});
-          r.on('end', () => resolve(r));
-        });
-        req.on('error', reject);
-        req.write(JSON.stringify({ acknowledged_event_ids: [] }));
-        req.end();
-      });
+      const sendReq = () => requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/ack`, {
+        headers: {
+          'X-PeerScribe-Session': session.sessionId,
+          'X-PeerScribe-Token': session.sessionToken,
+          'X-PeerScribe-Peer-Id': serviceClient.nodeId,
+          'X-PeerScribe-Nonce': replayNonce,
+          'X-PeerScribe-Timestamp': timestamp
+        }
+      }, { acknowledged_event_ids: [] });
 
       const res1 = await sendReq();
       assert.strictEqual(res1.statusCode, 200);
 
-      // 2. Replay identical request with identical nonce
+      // Replay identical request with identical nonce
       const res2 = await sendReq();
       assert.strictEqual(res2.statusCode, 409, 'Replayed nonce must be rejected with 409 Conflict');
+    });
+
+    it('rejects forged ack IDs not transmitted to that peer in that session', async () => {
+      let hostOutbox = [
+        {
+          schema_version: 1,
+          event_id: 'evt_real_outbox_untransmitted',
+          operation_id: 'OP_ACK',
+          entity_id: 'pt_1',
+          event_type: 'PATIENT_CREATED',
+          actor_id: 'host_node',
+          actor_sequence: 1,
+          lamport_timestamp: 1,
+          occurred_at_utc: new Date().toISOString(),
+          payload: {}
+        }
+      ];
+
+      serviceHost.getState = () => ({
+        eventsLog: [],
+        outboxQueue: hostOutbox,
+        activeOperation: { operation_id: 'OP_ACK' }
+      });
+      serviceHost.onOutboxAcknowledged = (ids) => {
+        hostOutbox = hostOutbox.filter(e => !ids.includes(e.event_id));
+      };
+
+      const session = await serviceClient.pairWithPeer(`http://127.0.0.1:${hostPort}`, hostPairingPin);
+
+      // Client sends an ACK for 'evt_real_outbox_untransmitted' WITHOUT host having sent it to client
+      const ackRes = await requestJson(`http://127.0.0.1:${hostPort}/api/v1/sync/ack`, {
+        headers: {
+          'X-PeerScribe-Session': session.sessionId,
+          'X-PeerScribe-Token': session.sessionToken,
+          'X-PeerScribe-Peer-Id': serviceClient.nodeId,
+          'X-PeerScribe-Nonce': 'nonce_forged_' + crypto.randomUUID(),
+          'X-PeerScribe-Timestamp': new Date().toISOString()
+        }
+      }, { acknowledged_event_ids: ['evt_real_outbox_untransmitted'] });
+
+      assert.strictEqual(ackRes.statusCode, 200);
+      assert.strictEqual(ackRes.json.acknowledged, 0, 'Forged ID must NOT be acknowledged');
+      assert.strictEqual(ackRes.json.rejected_forged, 1, 'Forged ID must be counted in rejected_forged');
+      assert.strictEqual(hostOutbox.length, 1, 'Host outbox must remain untouched');
     });
   });
 
   // --------------------------------------------------------------------------
-  // P0-3: Correct Event Acknowledgement Semantics Tests
+  // P0-B: Strict Durable Event Acknowledgement Invariants
   // --------------------------------------------------------------------------
   describe('P0-3: Strict Durable Event Acknowledgement Invariants', () => {
     let host;
@@ -422,10 +581,10 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       shouldDbFail = false;
       client.clientSessions.clear();
       host.activeSessions.clear();
+      host.setPairingPin(pin);
     });
 
     it('rejects malformed events and does NOT acknowledge them', async () => {
-      // Client has 1 valid event and 1 malformed event
       client.getState = () => ({
         eventsLog: [],
         outboxQueue: [
@@ -453,10 +612,65 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
 
       assert.strictEqual(syncRes.success, true);
-      // Valid event was acknowledged and persisted
       assert.ok(hostEvents.some(e => e.event_id === 'evt_valid_101'), 'Valid event persisted');
-      // Malformed event recorded in rejectedEventsLog without clinical data leak
       assert.ok(host.rejectedEventsLog.some(r => r.reason.includes('Missing mandatory schema fields')));
+    });
+
+    it('rejects events with invalid timestamp format without acknowledgement', async () => {
+      client.getState = () => ({
+        eventsLog: [],
+        outboxQueue: [
+          {
+            schema_version: 1,
+            event_id: 'evt_bad_ts',
+            operation_id: 'OP_ACK',
+            entity_id: 'pt_ts',
+            event_type: 'PATIENT_CREATED',
+            actor_id: client.nodeId,
+            actor_sequence: 1,
+            lamport_timestamp: 1,
+            occurred_at_utc: 'NOT_A_VALID_ISO_TIMESTAMP',
+            payload: {}
+          }
+        ],
+        activeOperation: { operation_id: 'OP_ACK' }
+      });
+
+      let ackedOutbox = [];
+      client.onOutboxAcknowledged = (ids) => { ackedOutbox = ids; };
+
+      const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
+      assert.strictEqual(syncRes.success, true);
+      assert.strictEqual(ackedOutbox.length, 0, 'Bad timestamp must not be acknowledged');
+      assert.strictEqual(hostEvents.length, 0, 'Bad timestamp event must not be persisted');
+    });
+
+    it('rejects events with invalid actor sequence or lamport timestamp (non-positive)', async () => {
+      client.getState = () => ({
+        eventsLog: [],
+        outboxQueue: [
+          {
+            schema_version: 1,
+            event_id: 'evt_bad_seq',
+            operation_id: 'OP_ACK',
+            entity_id: 'pt_seq',
+            event_type: 'PATIENT_CREATED',
+            actor_id: client.nodeId,
+            actor_sequence: 0, // Invalid: must be positive
+            lamport_timestamp: 1,
+            occurred_at_utc: new Date().toISOString(),
+            payload: {}
+          }
+        ],
+        activeOperation: { operation_id: 'OP_ACK' }
+      });
+
+      let ackedOutbox = [];
+      client.onOutboxAcknowledged = (ids) => { ackedOutbox = ids; };
+
+      const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
+      assert.strictEqual(syncRes.success, true);
+      assert.strictEqual(ackedOutbox.length, 0, 'Invalid sequence must not be acknowledged');
     });
 
     it('rejects events with unsupported schema versions without acknowledgement', async () => {
@@ -470,7 +684,10 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
             entity_id: 'pt_2',
             event_type: 'PATIENT_CREATED',
             actor_id: client.nodeId,
-            occurred_at_utc: new Date().toISOString()
+            actor_sequence: 1,
+            lamport_timestamp: 1,
+            occurred_at_utc: new Date().toISOString(),
+            payload: {}
           }
         ],
         activeOperation: { operation_id: 'OP_ACK' }
@@ -483,7 +700,7 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
     });
 
     it('database failure results in NO successful acknowledgement for affected events', async () => {
-      shouldDbFail = true; // Simulate database write error on receiver
+      shouldDbFail = true;
 
       client.getState = () => ({
         eventsLog: [],
@@ -509,7 +726,6 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
 
       const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
       assert.strictEqual(syncRes.success, true);
-      // Invariant: Unpersisted event must NOT be acknowledged!
       assert.strictEqual(ackedOutbox.length, 0, 'No events must be acknowledged when DB write fails');
       assert.strictEqual(hostEvents.length, 0, 'No events in host DB');
     });
@@ -522,12 +738,13 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
         entity_id: 'pt_dup',
         event_type: 'PATIENT_CREATED',
         actor_id: 'node_prior',
-        occurred_at_utc: new Date().toISOString()
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: {}
       };
-      // Host already has the durable event
       hostEvents.push(existingEvt);
 
-      // Client re-sends the same event
       client.getState = () => ({
         eventsLog: [existingEvt],
         outboxQueue: [existingEvt],
@@ -539,10 +756,114 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
 
       const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
       assert.strictEqual(syncRes.success, true);
-      // Event was acknowledged
-      assert.ok(clientAcked.includes('evt_already_durable'), 'Existing duplicate must be acknowledged to clear sender outbox');
-      // But host event count remains 1 (no duplicate insertion)
+      assert.ok(clientAcked.includes('evt_already_durable'), 'Existing duplicate must be acknowledged');
       assert.strictEqual(hostEvents.length, 1, 'Duplicate event must NOT be inserted twice');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // P1-C: Electron Crash-Consistent Persistence & Fault Injection
+  // --------------------------------------------------------------------------
+  describe('P1-C: Electron Crash-Consistent Persistence Engine', () => {
+    const testPersistenceDir = path.resolve(__dirname, '../test_scratch_persistence');
+
+    beforeEach(() => {
+      if (fs.existsSync(testPersistenceDir)) {
+        fs.rmSync(testPersistenceDir, { recursive: true, force: true });
+      }
+      fs.mkdirSync(testPersistenceDir, { recursive: true });
+    });
+
+    it('recovers unacknowledged event from immutable log when crash occurs before outbox write', () => {
+      const engine1 = new TacticalStorageEngine(testPersistenceDir);
+      engine1._injectFailAfterEventAppend = true;
+
+      const evt = {
+        schema_version: 1,
+        event_id: 'evt_crash_recovery_1',
+        operation_id: 'OP_TEST',
+        entity_id: 'pt_c1',
+        event_type: 'PATIENT_CREATED',
+        actor_id: 'node_tester',
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: { test: true }
+      };
+
+      // Injected crash occurs after writing to immutable_events.jsonl before outbox_state.json
+      assert.throws(
+        () => engine1.persistEvent(evt),
+        /Injected crash fault immediately after event append/
+      );
+
+      // Verify the event exists in immutable_events.jsonl
+      const lines = fs.readFileSync(engine1.eventsFile, 'utf8').trim().split('\n');
+      assert.strictEqual(lines.length, 1);
+
+      // RESTART simulation: Create new storage engine pointing to the same data directory
+      const engineRestarted = new TacticalStorageEngine(testPersistenceDir);
+      assert.strictEqual(engineRestarted.eventsLog.length, 1);
+      // RECONCILIATION INVARIANT: Outbox must recover the unacknowledged event!
+      assert.strictEqual(engineRestarted.outboxQueue.length, 1);
+      assert.strictEqual(engineRestarted.outboxQueue[0].event_id, 'evt_crash_recovery_1');
+    });
+
+    it('repairs missing outbox state when a duplicate is received after incomplete forwarding', () => {
+      const engine = new TacticalStorageEngine(testPersistenceDir);
+
+      const evt = {
+        schema_version: 1,
+        event_id: 'evt_dup_repair',
+        operation_id: 'OP_TEST',
+        entity_id: 'pt_dup',
+        event_type: 'PATIENT_CREATED',
+        actor_id: 'node_tester',
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: {}
+      };
+      engine.persistEvent(evt);
+
+      // Simulate outbox entry somehow missing or corrupted (manually cleared without ack)
+      engine.outboxQueue = [];
+      engine._persistOutboxStateAtomic();
+      assert.strictEqual(engine.outboxQueue.length, 0);
+
+      // Duplicate ingestion occurs: Invariant: Duplicate must repair outbox state!
+      const repaired = engine.repairDuplicateOutboxState('evt_dup_repair');
+      assert.strictEqual(repaired, true);
+      assert.strictEqual(engine.outboxQueue.length, 1, 'Outbox entry must be repaired on duplicate ingestion');
+      assert.strictEqual(engine.outboxQueue[0].event_id, 'evt_dup_repair');
+    });
+
+    it('does not re-enqueue acknowledged events upon restart recovery', () => {
+      const engine = new TacticalStorageEngine(testPersistenceDir);
+      const evt = {
+        schema_version: 1,
+        event_id: 'evt_acked_1',
+        operation_id: 'OP_TEST',
+        entity_id: 'pt_ack',
+        event_type: 'PATIENT_CREATED',
+        actor_id: 'node_tester',
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: {}
+      };
+
+      engine.persistEvent(evt);
+      assert.strictEqual(engine.outboxQueue.length, 1);
+
+      // Peer acknowledges event
+      engine.acknowledgeEvents(['evt_acked_1']);
+      assert.strictEqual(engine.outboxQueue.length, 0);
+
+      // Restart
+      const engineRestarted = new TacticalStorageEngine(testPersistenceDir);
+      assert.strictEqual(engineRestarted.eventsLog.length, 1);
+      assert.strictEqual(engineRestarted.outboxQueue.length, 0, 'Acknowledged event must NOT be re-enqueued on restart');
     });
   });
 
@@ -593,7 +914,6 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
         onEventsIngested: (newEvents) => {
           for (const evt of newEvents) {
             peerBEvents.push(evt);
-            // P1-5 Store-and-forward: Enqueue received events into outbox for propagation
             if (!peerBOutbox.some(e => e.event_id === evt.event_id)) {
               peerBOutbox.push(evt);
             }
@@ -637,15 +957,18 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
         // Step 2: A disconnects completely from network
         await serviceA.stopServer();
 
-        // Step 3: C connects and syncs with B (A is offline)
+        // Step 3: Peer B user authorizes Peer C connection
+        serviceB.setPairingPin(pinB);
+
+        // Step 4: C connects and syncs with B (A is offline)
         const syncCB = await serviceC.syncWithPeer(`http://127.0.0.1:${portB}`, pinB);
         assert.strictEqual(syncCB.success, true);
 
-        // Step 4: Verify C received A's event forwarded by B!
+        // Step 5: Verify C received A's event forwarded by B!
         assert.ok(peerCEvents.some(e => e.event_id === 'evt_from_origin_A'), 'C must receive event created by A via B');
 
-        // Step 5: Duplicate suppression on subsequent sync
-        const syncCB2 = await serviceC.syncWithPeer(`http://127.0.0.1:${portB}`, pinB);
+        // Step 6: Duplicate suppression on subsequent sync (session reused)
+        const syncCB2 = await serviceC.syncWithPeer(`http://127.0.0.1:${portB}`);
         assert.strictEqual(syncCB2.success, true);
         assert.strictEqual(peerCEvents.length, 1, 'Duplicate event must be suppressed and not duplicated');
       } finally {

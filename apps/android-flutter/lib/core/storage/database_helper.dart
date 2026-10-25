@@ -373,6 +373,25 @@ class DatabaseHelper {
     );
   }
 
+  /// Operational wipe: Zeroizes operational events and outbox, strictly preserving personal profile vault!
+  Future<void> wipeOperationalData() async {
+    final db = await getDatabase();
+    await db.transaction((txn) async {
+      await txn.delete('outbox');
+      await txn.delete('events');
+    });
+  }
+
+  /// Explicit user-authorized reset: Clears the encrypted personal health vault.
+  Future<void> resetFullVault() async {
+    final db = await getDatabase();
+    await db.delete(
+      'personal_profile',
+      where: 'profile_id = ?',
+      whereArgs: ['local_user'],
+    );
+  }
+
   /// Closes the database connection.
   Future<void> close() async {
     if (_database != null && _database!.isOpen) {

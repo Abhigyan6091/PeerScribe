@@ -366,7 +366,8 @@ void main() {
       expect(restoredProfile['is_configured'], isTrue);
       expect(restoredProfile['blood_group'], equals('O-'));
 
-      // 7. Migration / recovery when corrupt vault cannot be decrypted
+      // 7. Fail-closed protection when corrupt vault cannot be decrypted:
+      // Must NOT fallback to blank profile or allow silent overwrite!
       restartedVault.invalidateCache();
       await dbHelper.saveEncryptedProfile(
         encryptedPayload: 'NOT_VALID_ENCRYPTED_DATA',
@@ -374,8 +375,105 @@ void main() {
         authTagBase64: 'INVALID_TAG',
         isSyntheticDemo: false,
       );
-      final fallbackProfile = await restartedVault.getProfile();
-      expect(fallbackProfile['is_configured'], isFalse, reason: 'Corrupt vault should safely fallback to unconfigured profile');
+
+      // Reading a corrupted profile MUST throw VaultSecurityException and transition to corrupted state
+      expect(
+        () async => await restartedVault.getProfile(),
+        throwsA(isA<VaultSecurityException>()),
+      );
+      expect(restartedVault.vaultState, equals(VaultState.corrupted));
+
+      // Attempting to save/update an inaccessible/corrupted profile MUST be blocked
+      expect(
+        () async => await restartedVault.saveProfile({'blood_group': 'B+'}),
+        throwsA(isA<VaultSecurityException>()),
+      );
+
+      // Verify original encrypted data was NOT overwritten on disk
+      final preservedRow = await dbHelper.getEncryptedProfile();
+      expect(preservedRow, isNotNull);
+      expect(preservedRow!['encrypted_payload'], equals('NOT_VALID_ENCRYPTED_DATA'));
+
+      // Explicit user-authorized vault reset clears corrupted state
+      await restartedVault.resetVault();
+      expect(restartedVault.vaultState, equals(VaultState.unconfigured));
+      final resetProfile = await restartedVault.getProfile();
+      expect(resetProfile['is_configured'], isFalse);
+    });
+
+    test('P1-D: VaultKeyStorage failure handling fails closed without exposing raw keys', () async {
+      // 1. Key storage read failure throws VaultKeyStorageException
+      final throwingReadStorage = _ThrowingKeyStorage(throwOnRead: true);
+      final vaultWithFailingRead = PersonalVaultStore();
+      vaultWithFailingRead.setKeyStorage(throwingReadStorage);
+
+      // Seed encrypted profile row
+      await dbHelper.saveEncryptedProfile(
+        encryptedPayload: 'ENCRYPTED_CIPHERTEXT_123',
+        ivBase64: 'IV_123',
+        authTagBase64: 'TAG_123',
+        isSyntheticDemo: false,
+      );
+
+      expect(
+        () async => await vaultWithFailingRead.getProfile(),
+        throwsA(isA<VaultSecurityException>()),
+      );
+      expect(vaultWithFailingRead.vaultState, equals(VaultState.storageInaccessible));
+
+      // 2. Key storage write failure throws VaultKeyStorageException and never returns ephemeral key
+      final throwingWriteStorage = _ThrowingKeyStorage(throwOnWrite: true);
+      expect(
+        () async => await throwingWriteStorage.getOrCreateMasterKey(),
+        throwsA(isA<VaultKeyStorageException>()),
+      );
+    });
+
+    test('P0-B: Duplicate event insertion preserves single durable copy and handles transactions', () async {
+      final event = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_dup_storage_check',
+        operationId: 'OP_DURABLE_TEST',
+        entityId: 'pt_dup_check',
+        eventType: 'PATIENT_CREATED',
+        actorId: 'node_test_medic',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: '2026-10-25T12:00:00.000Z',
+        payload: {'tag': 'DUP-TEST'},
+      );
+
+      final firstInsert = await dbHelper.insertEvent(event);
+      expect(firstInsert, isTrue);
+
+      // Second insert of same ID must return false (primary key collision)
+      final secondInsert = await dbHelper.insertEvent(event);
+      expect(secondInsert, isFalse);
+
+      // Exactly one copy in database
+      final events = await dbHelper.getAllEvents();
+      expect(events.where((e) => e.eventId == 'evt_dup_storage_check').length, equals(1));
     });
   });
+}
+
+class _ThrowingKeyStorage implements VaultKeyStorage {
+  final bool throwOnRead;
+  final bool throwOnWrite;
+
+  _ThrowingKeyStorage({this.throwOnRead = false, this.throwOnWrite = false});
+
+  @override
+  Future<List<int>> getOrCreateMasterKey() async {
+    if (throwOnRead) {
+      throw const VaultKeyStorageException('Hardware keystore inaccessible');
+    }
+    if (throwOnWrite) {
+      throw const VaultKeyStorageException('Failed to persist newly generated key');
+    }
+    return List<int>.filled(32, 1);
+  }
+
+  @override
+  Future<void> clearMasterKey() async {}
 }

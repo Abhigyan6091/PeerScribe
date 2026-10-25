@@ -73,13 +73,14 @@ class PeerScribeEvent {
     if (schemaVersion != 1) {
       errors.add('Unsupported schema_version: $schemaVersion. Expected: 1');
     }
-    if (eventId.isEmpty) errors.add('event_id is required');
-    if (operationId.isEmpty) errors.add('operation_id is required');
-    if (entityId.isEmpty) errors.add('entity_id is required');
-    if (actorId.isEmpty) errors.add('actor_id is required');
+    if (eventId.trim().isEmpty) errors.add('event_id is required');
+    if (operationId.trim().isEmpty) errors.add('operation_id is required');
+    if (entityId.trim().isEmpty) errors.add('entity_id is required');
+    if (eventType.trim().isEmpty) errors.add('event_type is required');
+    if (actorId.trim().isEmpty) errors.add('actor_id is required');
     if (actorSequence < 1) errors.add('actor_sequence must be positive integer');
     if (lamportTimestamp < 1) errors.add('lamport_timestamp must be positive integer');
-    if (DateTime.tryParse(occurredAtUtc) == null) {
+    if (occurredAtUtc.trim().isEmpty || DateTime.tryParse(occurredAtUtc) == null) {
       errors.add('occurred_at_utc must be a valid ISO-8601 string');
     }
     return errors;
