@@ -134,9 +134,11 @@ jobs:
         working-directory: apps/android-flutter
         run: |
           dart analyze --no-fatal-warnings > analyze_output.txt 2>&1 || {
-            ERR=$(cat analyze_output.txt | head -n 30)
-            echo "::error title=Dart Analysis Error::$ERR"
-            cat analyze_output.txt
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                echo "::error title=Dart Analysis::$line"
+              fi
+            done < analyze_output.txt
             exit 1
           }
 
