@@ -193,6 +193,10 @@ class LanSyncService {
     _nodeId = id;
   }
 
+  void clearClientSessions() {
+    _clientSessions.clear();
+  }
+
   String setPairingPin(String pin, {int ttlSeconds = 60}) {
     _activePairingPin = pin.trim();
     _pairingPinExpiresAt = DateTime.now().millisecondsSinceEpoch + (ttlSeconds * 1000);
@@ -927,6 +931,9 @@ class LanSyncService {
 
       if (response.statusCode != HttpStatus.ok) {
         final errorText = await utf8.decodeStream(response);
+        if (response.statusCode == HttpStatus.unauthorized) {
+          _clientSessions.remove(cleanAddress);
+        }
         await _db.markOutboxAttemptFailed(outboxEventIds, reason: 'HTTP ${response.statusCode}');
         _pairedPeers[cleanAddress] = {
           'host': cleanAddress,

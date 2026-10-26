@@ -1110,6 +1110,9 @@ class LanSyncService {
         res.on('data', chunk => { respBody += chunk; });
         res.on('end', async () => {
           if (res.statusCode !== 200) {
+            if (res.statusCode === 401) {
+              this.clientSessions.delete(cleanAddress);
+            }
             reject(new Error(`Peer returned HTTP ${res.statusCode}: ${respBody}`));
             return;
           }

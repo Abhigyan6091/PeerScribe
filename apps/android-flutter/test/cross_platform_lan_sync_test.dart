@@ -96,6 +96,8 @@ void main() {
     await dbHelper.initDatabase();
 
     dartService = LanSyncService();
+    dartService.clearClientSessions();
+    dartService.setNodeId('node_mobile_flutter');
     dartService.setPairingPin(dartPairingPin, ttlSeconds: 300);
     await dartService.startServer(port: dartPort);
 
@@ -443,25 +445,25 @@ void main() {
       expect(restartB['status'], equals('RESTARTED'));
       expect(restartB['outboxCount'], greaterThanOrEqualTo(1));
 
-      // 4. Set up Peer C (Second Dart instance on port 4442 with separate SQLite database)
+      // 4. Set up Peer C with isolated database and fresh session
       final tempDirC = await Directory.systemTemp.createTemp('peerscribe_peer_c_');
       final dbPathC = '${tempDirC.path}${Platform.pathSeparator}peer_c.db';
-      final dbHelperC = DatabaseHelper();
-      dbHelperC.setDatabasePath(dbPathC);
-      await dbHelperC.initDatabase();
+      await dbHelper.close();
+      dbHelper.setDatabasePath(dbPathC);
+      await dbHelper.initDatabase();
 
-      final serviceC = LanSyncService();
-      serviceC.setNodeId('peer_c_dart');
+      dartService.setNodeId('peer_c_dart');
+      dartService.clearClientSessions();
       try {
-        final syncCToB = await serviceC.syncWithPeer(
+        final syncCToB = await dartService.syncWithPeer(
           'http://127.0.0.1:$nodePort',
           pairingPin: nodePairingPin,
         );
-        expect(syncCToB.success, isTrue);
+        expect(syncCToB.success, isTrue, reason: syncCToB.errorMessage);
         expect(syncCToB.eventsReceived, greaterThanOrEqualTo(1));
 
-        // 5. Verify Peer C durably persisted the multi-hop event
-        final storedInC = await dbHelperC.getEventById(multiHopEventId);
+        // 5. Verify Peer C durably persisted the multi-hop event in its isolated database
+        final storedInC = await dbHelper.getEventById(multiHopEventId);
         expect(storedInC, isNotNull);
         expect(storedInC!.payload['sector'], equals('TRIAGE-HOT-ZONE'));
 
@@ -470,8 +472,11 @@ void main() {
         final outboxB = (nodeBState['outbox'] as List).cast<Map<String, dynamic>>();
         expect(outboxB.any((e) => e['event_id'] == multiHopEventId), isFalse);
       } finally {
-        await serviceC.stopServer();
-        await dbHelperC.close();
+        await dbHelper.close();
+        dbHelper.setDatabasePath(dbPath);
+        await dbHelper.initDatabase();
+        dartService.setNodeId('node_mobile_flutter');
+        dartService.clearClientSessions();
         if (tempDirC.existsSync()) {
           try {
             tempDirC.deleteSync(recursive: true);
