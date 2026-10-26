@@ -782,6 +782,7 @@ class LanSyncService {
                 try {
                   divergencesCount = this.onEventsIngested(validNewEvents, incomingBundle.origin_node_id || claimedPeerId);
                   for (const evt of validNewEvents) {
+                    evt.origin_node_id = incomingBundle.origin_node_id || claimedPeerId;
                     acceptedEventIds.push(evt.event_id);
                     existingEventIds.add(evt.event_id);
                   }
@@ -797,8 +798,8 @@ class LanSyncService {
               // Acknowledged IDs accumulated STRICTLY from explicit durable results
               const acknowledgedEventIds = [...acceptedEventIds, ...duplicateEventIds];
 
-              // Prepare local outbox delta for return to peer
-              const serverOutbox = (state.outboxQueue || []).filter(e => e.actor_id !== claimedPeerId);
+              // Prepare local outbox delta for return to peer (suppress echoing events back to originating actor/node)
+              const serverOutbox = (state.outboxQueue || []).filter(e => e.actor_id !== claimedPeerId && (!e.origin_node_id || e.origin_node_id !== claimedPeerId));
 
               // Anti-forgery tracking: Record all outbox event IDs transmitted to this session
               for (const evt of serverOutbox) {

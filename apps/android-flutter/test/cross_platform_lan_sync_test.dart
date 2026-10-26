@@ -419,7 +419,7 @@ void main() {
         operationId: 'OP_CROSS_PLATFORM_TEST',
         entityId: 'pt_multihop_001',
         eventType: 'PATIENT_CREATED',
-        actorId: 'peer_a_dart',
+        actorId: 'node_mobile_flutter',
         actorSequence: 1,
         lamportTimestamp: 1,
         occurredAtUtc: '2026-10-25T14:15:00.000Z',
