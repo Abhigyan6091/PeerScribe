@@ -18,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _currentMode = 'FIELD'; // DORMANT | FIELD | EMERGENCY
+  ResponderRole _currentRole = ResponderRole.medicalResponder;
   final DatabaseHelper _db = DatabaseHelper();
   final SyncManager _sync = SyncManager();
 
@@ -241,6 +242,44 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Widget _buildRoleBadge() {
+    return PopupMenuButton<ResponderRole>(
+      initialValue: _currentRole,
+      tooltip: 'Switch Responder Role',
+      onSelected: (role) {
+        setState(() => _currentRole = role);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Switched to ${role.name} Role')),
+        );
+      },
+      itemBuilder: (context) => ResponderRole.values.map((role) {
+        return PopupMenuItem(
+          value: role,
+          child: Text(role.name.replaceAll('_', ' ')),
+        );
+      }).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: TacticalTheme.primary.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: TacticalTheme.primary, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.badge, size: 14, color: TacticalTheme.primary),
+            const SizedBox(width: 4),
+            Text(
+              _currentRole.name.replaceAll('_', ' '),
+              style: const TextStyle(color: TacticalTheme.primary, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildModeBadge() {
     Color badgeColor = TacticalTheme.primary;
     if (_currentMode == 'DORMANT') badgeColor = TacticalTheme.triageUnassessed;
@@ -333,6 +372,8 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Check Delta Updates',
             onPressed: _checkForDeltaUpdates,
           ),
+          Center(child: _buildRoleBadge()),
+          const SizedBox(width: 8),
           Padding(
             padding: const EdgeInsets.only(right: 12.0),
             child: Center(child: _buildModeBadge()),
@@ -483,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onTap: () {
                                 Navigator.push(
                                   context,
-                                  MaterialPageRoute(builder: (_) => CasualtyDossierScreen(patientId: p.patientId)),
+                                  MaterialPageRoute(builder: (_) => CasualtyDossierScreen(patientId: p.patientId, currentRole: _currentRole)),
                                 ).then((_) => _refreshState());
                               },
                             ),

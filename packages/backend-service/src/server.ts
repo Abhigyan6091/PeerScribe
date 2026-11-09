@@ -32,6 +32,8 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
   node.on('patientCreated', (doc) => broadcastSse('patientCreated', doc));
   node.on('patientUpdated', (data) => broadcastSse('patientUpdated', data));
   node.on('modeChanged', (data) => broadcastSse('modeChanged', data));
+  node.on('roleChanged', (data) => broadcastSse('roleChanged', data));
+  node.on('operationChanged', (data) => broadcastSse('operationChanged', data));
   node.on('sightingContracted', (data) => broadcastSse('sightingContracted', data));
   node.on('emergencyWiped', (data) => broadcastSse('emergencyWiped', data));
   node.on('activityLogged', (data) => broadcastSse('activityLogged', data));
@@ -102,6 +104,58 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         sendJson(200, { currentMode: updated });
         return;
       }
+
+      // --- Role & Capabilities ---
+      if (pathname === '/api/v1/role' && req.method === 'POST') {
+        const body = await readJsonBody();
+        const validRoles = ['PARTICIPANT', 'MEDICAL_RESPONDER', 'COORDINATOR', 'TRANSPORT', 'SUPPORT'];
+        if (!validRoles.includes(body.role)) {
+          sendJson(400, { error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+          return;
+        }
+        const updated = node.setRole(body.role);
+        sendJson(200, { currentRole: updated });
+        return;
+      }
+
+      // --- Operation Lifecycle & Archiving ---
+      if (pathname === '/api/v1/operations' && req.method === 'GET') {
+        sendJson(200, node.listOperations());
+        return;
+      }
+
+      if (pathname === '/api/v1/operations' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.operationId || !body.name) {
+          sendJson(400, { error: 'operationId and name are required' });
+          return;
+        }
+        node.createOperation(body.operationId, body.name, body.sectorGeohash);
+        sendJson(201, { success: true, operationId: body.operationId });
+        return;
+      }
+
+      const opSwitchMatch = pathname.match(/^\/api\/v1\/operations\/([^/]+)\/switch$/);
+      if (opSwitchMatch && req.method === 'POST') {
+        node.switchOperation(opSwitchMatch[1]);
+        sendJson(200, { success: true, currentOperationId: node.currentOperationId });
+        return;
+      }
+
+      const opFinalizeMatch = pathname.match(/^\/api\/v1\/operations\/([^/]+)\/finalize$/);
+      if (opFinalizeMatch && req.method === 'POST') {
+        node.finalizeOperation(opFinalizeMatch[1]);
+        sendJson(200, { success: true, status: 'FINALIZING' });
+        return;
+      }
+
+      const opArchiveMatch = pathname.match(/^\/api\/v1\/operations\/([^/]+)\/archive$/);
+      if (opArchiveMatch && req.method === 'POST') {
+        const archiveInfo = node.archiveOperation(opArchiveMatch[1]);
+        sendJson(200, { success: true, archiveInfo });
+        return;
+      }
+
 
       if (pathname === '/api/v1/patients' && req.method === 'GET') {
         sendJson(200, node.listPatients());
@@ -214,6 +268,34 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
             extractedAt: Date.now()
           }
         });
+        return;
+      }
+
+      if (pathname === '/api/v1/ai/transcribe-audio' && req.method === 'POST') {
+        const contentType = req.headers['content-type'] || '';
+        let audioBuf: Buffer;
+        let patientId: string | undefined;
+
+        if (contentType.includes('application/json')) {
+          const body = await readJsonBody();
+          if (!body.audioBase64) {
+            sendJson(400, { error: 'Field "audioBase64" is required when Content-Type is application/json' });
+            return;
+          }
+          audioBuf = Buffer.from(body.audioBase64, 'base64');
+          patientId = body.patientId;
+        } else {
+          audioBuf = await new Promise<Buffer>((resolve, reject) => {
+            const chunks: Buffer[] = [];
+            req.on('data', chunk => chunks.push(Buffer.from(chunk)));
+            req.on('end', () => resolve(Buffer.concat(chunks)));
+            req.on('error', reject);
+          });
+          patientId = req.headers['x-patient-id'] as string | undefined;
+        }
+
+        const result = await node.processVoiceAudio(audioBuf, patientId);
+        sendJson(200, result);
         return;
       }
 
@@ -331,6 +413,10 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
       sendJson(404, { error: 'Not Found' });
     } catch (err: any) {
+      if (err.message && err.message.startsWith('Unauthorized:')) {
+        sendJson(403, { error: err.message, authorizationFailed: true });
+        return;
+      }
       sendJson(500, { error: err.message || 'Internal Server Error' });
     }
   });

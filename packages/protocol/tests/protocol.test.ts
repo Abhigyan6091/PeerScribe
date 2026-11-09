@@ -246,4 +246,75 @@ describe('PeerScribe Shared Protocol Specification', () => {
     assert.strictEqual(projResolved?.divergence_flags[0].resolved, true);
     assert.strictEqual(projResolved?.divergence_flags[0].resolved_by, 'node_trauma_lead');
   });
+
+  it('enforces Role-Based Access Control and capability authorization', () => {
+    // 1. Participant attempting to override triage without authorization
+    const unauthorizedTriageEvt: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_rbac_unauth_01',
+      operation_id: 'OP_TEST',
+      entity_id: 'pt_test_01',
+      event_type: 'TRIAGE_STATUS_CHANGED',
+      actor_id: 'node_participant_01',
+      actor_role: 'PARTICIPANT',
+      actor_sequence: 1,
+      lamport_timestamp: 1,
+      occurred_at_utc: new Date().toISOString(),
+      payload: { triage_category: 'RED' }
+    };
+
+    const res1 = validateEvent(unauthorizedTriageEvt);
+    assert.strictEqual(res1.valid, false, 'Participant must be rejected from overriding triage');
+    assert.ok(res1.errors.some(e => e.includes('lacks authorization for event TRIAGE_STATUS_CHANGED')));
+
+    // 2. Medical responder authorized to override triage
+    const authorizedTriageEvt: PeerScribeEvent = {
+      ...unauthorizedTriageEvt,
+      actor_role: 'MEDICAL_RESPONDER'
+    };
+    const res2 = validateEvent(authorizedTriageEvt);
+    assert.strictEqual(res2.valid, true, 'Medical Responder must be permitted to override triage');
+
+    // 3. Participant attempting divergence resolution
+    const unauthorizedResolveEvt: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_rbac_unauth_02',
+      operation_id: 'OP_TEST',
+      entity_id: 'pt_test_01',
+      event_type: 'DIVERGENCE_RESOLVED',
+      actor_id: 'node_participant_01',
+      actor_role: 'PARTICIPANT',
+      actor_sequence: 2,
+      lamport_timestamp: 2,
+      occurred_at_utc: new Date().toISOString(),
+      payload: { resolved_category: 'GREEN', clinician_signoff_note: 'Resolved by participant' }
+    };
+    const res3 = validateEvent(unauthorizedResolveEvt);
+    assert.strictEqual(res3.valid, false, 'Participant must be rejected from resolving divergence');
+
+    // 4. Coordinator authorized for all actions
+    const coordinatorResolveEvt: PeerScribeEvent = {
+      ...unauthorizedResolveEvt,
+      actor_role: 'COORDINATOR'
+    };
+    const res4 = validateEvent(coordinatorResolveEvt);
+    assert.strictEqual(res4.valid, true, 'Coordinator must be permitted to resolve divergence');
+
+    // 5. Participant permitted to record observations
+    const participantObsEvt: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_rbac_auth_03',
+      operation_id: 'OP_TEST',
+      entity_id: 'pt_test_01',
+      event_type: 'OBSERVATION_RECORDED',
+      actor_id: 'node_participant_01',
+      actor_role: 'PARTICIPANT',
+      actor_sequence: 3,
+      lamport_timestamp: 3,
+      occurred_at_utc: new Date().toISOString(),
+      payload: { text: 'Victim found near entrance' }
+    };
+    const res5 = validateEvent(participantObsEvt);
+    assert.strictEqual(res5.valid, true, 'Participant is permitted to record observations');
+  });
 });

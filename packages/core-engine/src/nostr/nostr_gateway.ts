@@ -362,3 +362,173 @@ export class NostrGatewayService {
     this.isGatewayActive = false;
   }
 }
+
+/**
+ * Live Nostr WebSocket WAN Relay Pool (NIP-01 compliant).
+ * Manages concurrent WebSocket connections to public/private relays,
+ * handles automatic reconnection with exponential backoff, publishes encrypted
+ * Kind 20042 mesh events, and streams incoming remote updates with duplicate suppression.
+ */
+export class LiveNostrRelayPool {
+  private relayUrls: string[];
+  private sockets: Map<string, any> = new Map();
+  private reconnectTimers: Map<string, any> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
+  private isDestroyed = false;
+  public readonly subscriptionId: string;
+  public activeRelayCount = 0;
+
+  public readonly operationId: string;
+  public readonly sharedSecret: Buffer;
+  private readonly gateway: NostrGatewayService;
+  private readonly onBundleCallback?: (decrypted: Buffer, event: NostrEvent) => void;
+
+  constructor(
+    operationId: string,
+    sharedSecret: Buffer,
+    relayUrls: string[] = ['wss://relay.damus.io', 'wss://nostr.mom'],
+    gateway: NostrGatewayService = new NostrGatewayService(),
+    onBundleCallback?: (decrypted: Buffer, event: NostrEvent) => void
+  ) {
+    this.operationId = operationId;
+    this.sharedSecret = sharedSecret;
+    this.relayUrls = relayUrls;
+    this.gateway = gateway;
+    this.onBundleCallback = onBundleCallback;
+    this.subscriptionId = 'ps_sub_' + crypto.randomBytes(4).toString('hex');
+  }
+
+  /**
+   * Connect to all configured relays and subscribe to mesh events.
+   */
+  async connect(): Promise<void> {
+    if (this.isDestroyed) return;
+    for (const url of this.relayUrls) {
+      this.connectToRelay(url);
+    }
+  }
+
+  private connectToRelay(url: string): void {
+    if (this.isDestroyed || typeof WebSocket === 'undefined') return;
+
+    try {
+      const ws = new WebSocket(url);
+      this.sockets.set(url, ws);
+
+      ws.onopen = () => {
+        this.activeRelayCount++;
+        this.reconnectAttempts.set(url, 0);
+        // Subscribe to Kind 20042 mesh sync events
+        const reqMessage = JSON.stringify([
+          'REQ',
+          this.subscriptionId,
+          {
+            kinds: [NOSTR_KIND_MESH_SYNC],
+            '#o': [this.operationId]
+          }
+        ]);
+        try {
+          ws.send(reqMessage);
+        } catch (e) {
+          // Ignore transient socket error
+        }
+      };
+
+      ws.onmessage = (event: any) => {
+        try {
+          const raw = typeof event.data === 'string' ? event.data : event.data.toString();
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return;
+
+          const [type, ...args] = parsed;
+          if (type === 'EVENT' && args.length >= 2) {
+            const nostrEvt: NostrEvent = args[1];
+            const decrypted = this.gateway.ingestRelayEvent(nostrEvt, this.sharedSecret);
+            if (decrypted && this.onBundleCallback) {
+              this.onBundleCallback(decrypted, nostrEvt);
+            }
+          }
+        } catch (e) {
+          // Discard unparsable or malformed frame
+        }
+      };
+
+      ws.onerror = () => {
+        // Handled in onclose
+      };
+
+      ws.onclose = () => {
+        if (this.sockets.has(url)) {
+          this.sockets.delete(url);
+          this.activeRelayCount = Math.max(0, this.activeRelayCount - 1);
+        }
+        if (!this.isDestroyed) {
+          this.scheduleReconnect(url);
+        }
+      };
+    } catch (err) {
+      this.scheduleReconnect(url);
+    }
+  }
+
+  private scheduleReconnect(url: string): void {
+    if (this.isDestroyed) return;
+    const attempts = (this.reconnectAttempts.get(url) || 0) + 1;
+    this.reconnectAttempts.set(url, attempts);
+    const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(attempts, 5)));
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(url);
+      this.connectToRelay(url);
+    }, delay);
+    this.reconnectTimers.set(url, timer);
+  }
+
+  /**
+   * Publish a signed encrypted Nostr event to all connected relays.
+   */
+  async publish(event: NostrEvent): Promise<{ publishedCount: number; errors: Record<string, string> }> {
+    const payload = JSON.stringify(['EVENT', event]);
+    let publishedCount = 0;
+    const errors: Record<string, string> = {};
+
+    for (const [url, ws] of this.sockets.entries()) {
+      try {
+        if (ws.readyState === 1 /* OPEN */) {
+          ws.send(payload);
+          publishedCount++;
+        } else {
+          errors[url] = 'Socket not open';
+        }
+      } catch (err: any) {
+        errors[url] = err.message || 'Send error';
+      }
+    }
+
+    return { publishedCount, errors };
+  }
+
+  /**
+   * Gracefully close all WebSocket connections and subscriptions.
+   */
+  close(): void {
+    this.isDestroyed = true;
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
+
+    for (const [url, ws] of this.sockets.entries()) {
+      try {
+        if (ws.readyState === 1 /* OPEN */) {
+          ws.send(JSON.stringify(['CLOSE', this.subscriptionId]));
+          ws.close();
+        }
+      } catch (e) {
+        // Ignore during shutdown
+      }
+    }
+    this.sockets.clear();
+    this.activeRelayCount = 0;
+  }
+}

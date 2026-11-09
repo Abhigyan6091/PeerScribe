@@ -235,5 +235,61 @@ void main() {
       expect(projResolved.triageDisplayLabel, equals('RED'));
       expect(projResolved.divergenceFlags.first['resolved'], isTrue);
     });
+
+    test('enforces RBAC role capabilities and rejects unauthorized clinical operations', () {
+      // 1. Participant attempting unauthorized triage change
+      final unauthEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_unauth_flutter_01',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'TRIAGE_STATUS_CHANGED',
+        actorId: 'node_civilian',
+        actorRole: 'PARTICIPANT',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'triage_category': 'RED'},
+      );
+
+      final errors = unauthEvent.validate();
+      expect(errors, isNotEmpty);
+      expect(errors.first, contains('lacks authorization for event TRIAGE_STATUS_CHANGED'));
+
+      // 2. Medical responder authorized for triage change
+      final authEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_auth_flutter_02',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'TRIAGE_STATUS_CHANGED',
+        actorId: 'node_medic',
+        actorRole: 'MEDICAL_RESPONDER',
+        actorSequence: 2,
+        lamportTimestamp: 2,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'triage_category': 'YELLOW'},
+      );
+
+      final authErrors = authEvent.validate();
+      expect(authErrors, isEmpty);
+
+      // 3. Participant authorized for observation recording
+      final obsEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_obs_flutter_03',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'OBSERVATION_RECORDED',
+        actorId: 'node_civilian',
+        actorRole: 'PARTICIPANT',
+        actorSequence: 3,
+        lamportTimestamp: 3,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'text': 'Found responsive'},
+      );
+
+      expect(obsEvent.validate(), isEmpty);
+    });
   });
 }

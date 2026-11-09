@@ -10,9 +10,85 @@ export type PeerScribeEventType =
   | 'SOS_CREATED'
   | 'VAULT_SNAPSHOT_ATTACHED'
   | 'DIVERGENCE_ACKNOWLEDGED'
-  | 'DIVERGENCE_RESOLVED';
+  | 'DIVERGENCE_RESOLVED'
+  | 'AUTHORIZATION_FAILED';
 
 export type TriageCategory = 'RED' | 'YELLOW' | 'GREEN' | 'BLACK' | 'UNASSESSED';
+
+export type ResponderRole = 'PARTICIPANT' | 'MEDICAL_RESPONDER' | 'COORDINATOR' | 'TRANSPORT' | 'SUPPORT';
+
+export type Capability =
+  | 'RECORD_OBSERVATION'
+  | 'RECORD_VITALS'
+  | 'RECORD_INJURY'
+  | 'OVERRIDE_TRIAGE'
+  | 'ADMINISTER_MEDICATION'
+  | 'ATTACH_VAULT_SNAPSHOT'
+  | 'RESOLVE_DIVERGENCE'
+  | 'MANAGE_OPERATION'
+  | 'DISPATCH_TRANSPORT';
+
+export const ROLE_CAPABILITIES: Record<ResponderRole, Capability[]> = {
+  PARTICIPANT: [
+    'RECORD_OBSERVATION',
+    'ATTACH_VAULT_SNAPSHOT'
+  ],
+  SUPPORT: [
+    'RECORD_OBSERVATION',
+    'RECORD_VITALS',
+    'RECORD_INJURY',
+    'ATTACH_VAULT_SNAPSHOT'
+  ],
+  TRANSPORT: [
+    'RECORD_OBSERVATION',
+    'RECORD_VITALS',
+    'RECORD_INJURY',
+    'ATTACH_VAULT_SNAPSHOT',
+    'DISPATCH_TRANSPORT'
+  ],
+  MEDICAL_RESPONDER: [
+    'RECORD_OBSERVATION',
+    'RECORD_VITALS',
+    'RECORD_INJURY',
+    'ATTACH_VAULT_SNAPSHOT',
+    'OVERRIDE_TRIAGE',
+    'ADMINISTER_MEDICATION',
+    'RESOLVE_DIVERGENCE',
+    'DISPATCH_TRANSPORT'
+  ],
+  COORDINATOR: [
+    'RECORD_OBSERVATION',
+    'RECORD_VITALS',
+    'RECORD_INJURY',
+    'ATTACH_VAULT_SNAPSHOT',
+    'OVERRIDE_TRIAGE',
+    'ADMINISTER_MEDICATION',
+    'RESOLVE_DIVERGENCE',
+    'MANAGE_OPERATION',
+    'DISPATCH_TRANSPORT'
+  ]
+};
+
+export const EVENT_REQUIRED_CAPABILITIES: Partial<Record<PeerScribeEventType, Capability>> = {
+  OBSERVATION_RECORDED: 'RECORD_OBSERVATION',
+  VITALS_RECORDED: 'RECORD_VITALS',
+  INJURY_RECORDED: 'RECORD_INJURY',
+  TRIAGE_STATUS_CHANGED: 'OVERRIDE_TRIAGE',
+  MEDICATION_RECORDED: 'ADMINISTER_MEDICATION',
+  VAULT_SNAPSHOT_ATTACHED: 'ATTACH_VAULT_SNAPSHOT',
+  DIVERGENCE_RESOLVED: 'RESOLVE_DIVERGENCE'
+};
+
+export function hasCapability(role: ResponderRole, capability: Capability): boolean {
+  const caps = ROLE_CAPABILITIES[role];
+  return Array.isArray(caps) && caps.includes(capability);
+}
+
+export function canPerformEvent(role: ResponderRole, eventType: PeerScribeEventType): boolean {
+  const required = EVENT_REQUIRED_CAPABILITIES[eventType];
+  if (!required) return true; // Events like PATIENT_CREATED, SOS_CREATED, DIVERGENCE_ACKNOWLEDGED permitted
+  return hasCapability(role, required);
+}
 
 export interface PeerScribeEvent<T = any> {
   schema_version: number;
@@ -21,6 +97,7 @@ export interface PeerScribeEvent<T = any> {
   entity_id: string;
   event_type: PeerScribeEventType;
   actor_id: string;
+  actor_role?: ResponderRole;
   actor_sequence: number;
   lamport_timestamp: number;
   causal_context?: Record<string, number>;
@@ -62,6 +139,7 @@ export interface ProjectedPatientState {
   known_allergies: string[];
   notes: any[];
   divergence_flags: any[];
+  authorization_failures?: any[];
 }
 
 /**
@@ -84,10 +162,11 @@ export function validateEvent(event: any): { valid: boolean; errors: string[] } 
   if (!event.entity_id || typeof event.entity_id !== 'string') {
     errors.push('entity_id is required and must be a string');
   }
-  const validTypes = [
+  const validTypes: PeerScribeEventType[] = [
     'PATIENT_CREATED', 'OBSERVATION_RECORDED', 'VITALS_RECORDED', 'INJURY_RECORDED',
     'ALLERGY_RECORDED', 'TRIAGE_STATUS_CHANGED', 'MEDICATION_RECORDED', 'LOCATION_OBSERVED',
-    'SOS_CREATED', 'VAULT_SNAPSHOT_ATTACHED', 'DIVERGENCE_ACKNOWLEDGED', 'DIVERGENCE_RESOLVED'
+    'SOS_CREATED', 'VAULT_SNAPSHOT_ATTACHED', 'DIVERGENCE_ACKNOWLEDGED', 'DIVERGENCE_RESOLVED',
+    'AUTHORIZATION_FAILED'
   ];
   if (!validTypes.includes(event.event_type)) {
     errors.push(`Unknown event_type: ${event.event_type}`);
@@ -95,6 +174,17 @@ export function validateEvent(event: any): { valid: boolean; errors: string[] } 
   if (!event.actor_id || typeof event.actor_id !== 'string') {
     errors.push('actor_id is required and must be a string');
   }
+
+  // Role validation if actor_role provided
+  if (event.actor_role) {
+    const validRoles: ResponderRole[] = ['PARTICIPANT', 'MEDICAL_RESPONDER', 'COORDINATOR', 'TRANSPORT', 'SUPPORT'];
+    if (!validRoles.includes(event.actor_role)) {
+      errors.push(`Invalid actor_role: ${event.actor_role}`);
+    } else if (!canPerformEvent(event.actor_role, event.event_type)) {
+      errors.push(`Role ${event.actor_role} lacks authorization for event ${event.event_type}`);
+    }
+  }
+
   if (typeof event.actor_sequence !== 'number' || event.actor_sequence < 1) {
     errors.push('actor_sequence must be a positive integer');
   }
@@ -174,7 +264,8 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
     medications: [],
     known_allergies: [],
     notes: [],
-    divergence_flags: []
+    divergence_flags: [],
+    authorization_failures: []
   };
 
   let resolvedCategory: TriageCategory | null = null;
@@ -219,6 +310,7 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
         state.triage_history.push({
           event_id: evt.event_id,
           actor_id: evt.actor_id,
+          actor_role: evt.actor_role,
           category: evt.payload.triage_category,
           lamport_timestamp: evt.lamport_timestamp,
           occurred_at_utc: evt.occurred_at_utc
@@ -237,6 +329,16 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
             f.resolved_by = evt.actor_id;
             f.resolution_note = evt.payload.clinician_signoff_note;
           }
+        });
+        break;
+      case 'AUTHORIZATION_FAILED':
+        state.authorization_failures?.push({
+          event_id: evt.event_id,
+          timestamp: evt.occurred_at_utc,
+          actor_id: evt.actor_id,
+          attempted_action: evt.payload.attempted_action,
+          role: evt.actor_role,
+          reason: evt.payload.reason
         });
         break;
     }

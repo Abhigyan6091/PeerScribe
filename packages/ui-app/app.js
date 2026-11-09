@@ -11,6 +11,8 @@ let currentBackendNodeId = null;
 let telemetryInterval = null;
 let isRecording = false;
 let isBackendConnected = false;
+let currentResponderRole = 'MEDICAL_RESPONDER';
+let currentActiveOperationId = 'OP-TACTICAL-ALPHA';
 
 // Active triage target
 let activePatient = {
@@ -163,6 +165,10 @@ function setupSseStream() {
 }
 
 async function assignTriage(category, autoAdvance = true) {
+  if (currentResponderRole === 'PARTICIPANT') {
+    alert('⛔ ACCESS DENIED: Role PARTICIPANT lacks TRIAGE_OVERRIDE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.');
+    return;
+  }
   activePatient.triage = category;
 
   if (navigator.vibrate) {
@@ -977,6 +983,10 @@ function closeDivergenceModal() {
 }
 
 async function resolveConflict(confirmedCategory, patientId) {
+  if (currentResponderRole === 'PARTICIPANT') {
+    alert('⛔ ACCESS DENIED: Role PARTICIPANT lacks RESOLVE_DIVERGENCE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.');
+    return;
+  }
   const banner = document.getElementById('divergenceBanner');
   if (banner) banner.style.display = 'none';
   closeDivergenceModal();
@@ -1817,3 +1827,204 @@ window.checkDeltaUpdates = async function() {
 initBackendConnection().then(() => {
   refreshTelemetry();
 });
+
+// =========================================================================
+// Role-Based Access Control (RBAC) & Tactical Operations Lifecycle Management
+// =========================================================================
+
+window.changeResponderRole = async function(role) {
+  currentResponderRole = role;
+  console.log('[RBAC] Role changed to:', role);
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/role`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role })
+      });
+      if (res.ok) {
+        console.log('[RBAC] Synced role to backend daemon:', role);
+      }
+    } catch (e) {
+      console.warn('[RBAC] Role sync failed:', e.message);
+    }
+  }
+  updateRbacUiState();
+};
+
+function updateRbacUiState() {
+  const roleSelect = document.getElementById('roleSelector');
+  if (roleSelect && roleSelect.value !== currentResponderRole) {
+    roleSelect.value = currentResponderRole;
+  }
+
+  // Visual cues for restricted roles
+  const triageButtons = document.querySelectorAll('.triage-btn');
+  triageButtons.forEach(btn => {
+    if (currentResponderRole === 'PARTICIPANT') {
+      btn.style.opacity = '0.5';
+      btn.title = 'Triage locked for PARTICIPANT role (Read-Only)';
+    } else {
+      btn.style.opacity = '1.0';
+      btn.title = '';
+    }
+  });
+}
+
+window.openOperationsModal = async function() {
+  const modal = document.getElementById('operationsModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    await loadOperationsList();
+  }
+};
+
+window.closeOperationsModal = function() {
+  const modal = document.getElementById('operationsModal');
+  if (modal) modal.style.display = 'none';
+};
+
+window.loadOperationsList = async function() {
+  const container = document.getElementById('operationsListContainer');
+  if (!container) return;
+
+  let ops = [
+    { operation_id: currentActiveOperationId, title: 'District 4 Tactical Response', status: 'ACTIVE' }
+  ];
+
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations`);
+      if (res.ok) {
+        ops = await res.json();
+      }
+    } catch (e) {
+      console.warn('[Operations] Failed loading operations list:', e);
+    }
+  }
+
+  container.innerHTML = ops.map(op => {
+    const isCurrent = op.operation_id === currentActiveOperationId;
+    const isCoord = currentResponderRole === 'COORDINATOR';
+
+    let actionButtons = '';
+    if (!isCurrent && op.status === 'ACTIVE') {
+      actionButtons += `<button onclick="switchActiveOperation('${op.operation_id}')" style="background: #0284C7; color: #FFF; border: none; border-radius: 3px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; cursor: pointer;">Switch</button>`;
+    }
+    if (op.status === 'ACTIVE') {
+      actionButtons += `<button onclick="finalizeActiveOperation('${op.operation_id}')" ${!isCoord ? 'disabled' : ''} style="background: ${isCoord ? '#EAB308' : '#334155'}; color: ${isCoord ? '#000' : '#64748B'}; border: none; border-radius: 3px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; cursor: ${isCoord ? 'pointer' : 'not-allowed'};" title="${isCoord ? 'Finalize operation' : 'Requires COORDINATOR role'}">Finalize</button>`;
+    }
+    if (op.status === 'FINALIZING') {
+      actionButtons += `<button onclick="archiveActiveOperation('${op.operation_id}')" ${!isCoord ? 'disabled' : ''} style="background: ${isCoord ? '#EF4444' : '#334155'}; color: #FFF; border: none; border-radius: 3px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; cursor: ${isCoord ? 'pointer' : 'not-allowed'};" title="${isCoord ? 'Archive encrypted incident' : 'Requires COORDINATOR role'}">Archive</button>`;
+    }
+
+    return `
+      <div style="background: #0B0F17; border: 1px solid ${isCurrent ? '#00F5D4' : '#1F2839'}; border-radius: 4px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div style="font-weight: 800; font-size: 0.82rem; color: #FFF; display: flex; align-items: center; gap: 6px;">
+            ${op.operation_id}
+            ${isCurrent ? '<span style="background: #00F5D4; color: #000; font-size: 0.65rem; padding: 1px 4px; border-radius: 2px;">ACTIVE</span>' : ''}
+            <span style="font-size: 0.65rem; color: #94A3B8; border: 1px solid #334155; padding: 1px 4px; border-radius: 2px;">${op.status}</span>
+          </div>
+          <div style="font-size: 0.74rem; color: #94A3B8;">${op.title || 'Disaster Response Incident'}</div>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          ${actionButtons}
+        </div>
+      </div>
+    `;
+  }).join('');
+};
+
+window.createNewOperation = async function() {
+  const idInput = document.getElementById('newOpIdInput');
+  const titleInput = document.getElementById('newOpTitleInput');
+  const opId = idInput?.value.trim();
+  const title = titleInput?.value.trim();
+
+  if (!opId) {
+    alert('Please enter an Operation ID (e.g. OP-EARTHQUAKE-2026)');
+    return;
+  }
+
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operationId: opId, title: title || opId })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Failed to create operation: ${err.error || 'Server error'}`);
+        return;
+      }
+    } catch (e) {
+      alert(`Network error: ${e.message}`);
+      return;
+    }
+  }
+
+  if (idInput) idInput.value = '';
+  if (titleInput) titleInput.value = '';
+  await loadOperationsList();
+};
+
+window.switchActiveOperation = async function(opId) {
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations/${opId}/switch`, { method: 'POST' });
+      if (res.ok) {
+        currentActiveOperationId = opId;
+        const opDisplay = document.getElementById('opTitleDisplay');
+        if (opDisplay) opDisplay.innerText = opId;
+        await loadBackendPatients();
+        await loadOperationsList();
+      }
+    } catch (e) {
+      alert(`Failed to switch operation: ${e.message}`);
+    }
+  } else {
+    currentActiveOperationId = opId;
+    await loadOperationsList();
+  }
+};
+
+window.finalizeActiveOperation = async function(opId) {
+  if (currentResponderRole !== 'COORDINATOR') {
+    alert('⛔ ACCESS DENIED: Only COORDINATOR role may finalize operations.');
+    return;
+  }
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations/${opId}/finalize`, { method: 'POST' });
+      if (res.ok) {
+        await loadOperationsList();
+      }
+    } catch (e) {
+      alert(`Failed to finalize operation: ${e.message}`);
+    }
+  }
+};
+
+window.archiveActiveOperation = async function(opId) {
+  if (currentResponderRole !== 'COORDINATOR') {
+    alert('⛔ ACCESS DENIED: Only COORDINATOR role may archive operations.');
+    return;
+  }
+  const confirmed = confirm(`⚠️ ARCHIVE OPERATION: Are you sure you want to finalize and archive all incident data for ${opId}? Personal profile vaults will remain strictly preserved.`);
+  if (!confirmed) return;
+
+  if (isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations/${opId}/archive`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        alert(`✅ OPERATION ARCHIVED: Incident snapshot sealed with SHA-256 digest ${data.archiveInfo?.archiveDigest?.slice(0, 16)}... Personal medical vaults strictly preserved.`);
+        await loadOperationsList();
+      }
+    } catch (e) {
+      alert(`Failed to archive operation: ${e.message}`);
+    }
+  }
+};

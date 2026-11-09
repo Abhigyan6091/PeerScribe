@@ -19,6 +19,9 @@ import {
   BundlePriority,
   NostrGatewayService,
   extractAndEvaluateTriage,
+  extractWithDualEngine,
+  OfflineWhisperEngine,
+  type WhisperTranscriptionResult,
   MobilityParticleFilter,
   EmergencyWipeService,
   type IdentityKeyPair,
@@ -28,7 +31,9 @@ import {
   crc32,
   createNostrMeshEvent,
   sha256,
-  type EmergencyMedicalSnapshot
+  type EmergencyMedicalSnapshot,
+  type ResponderRole,
+  hasCapability
 } from '../../core-engine/src/index.ts';
 
 export type OperationalMode = 'DORMANT' | 'FIELD' | 'EMERGENCY';
@@ -38,6 +43,7 @@ export interface DaemonConfig {
   nodeId?: string;
   operationId?: string;
   initialMode?: OperationalMode;
+  initialRole?: ResponderRole;
 }
 
 export interface WirePacketTelemetry {
@@ -67,6 +73,7 @@ export interface ActivityLogEntry {
 }
 
 export class PeerScribeDaemon extends EventEmitter {
+  private whisperEngine = new OfflineWhisperEngine();
   public nodeId: string;
   public keyPair: IdentityKeyPair;
   public readonly db: PeerScribeDatabase;
@@ -75,6 +82,7 @@ export class PeerScribeDaemon extends EventEmitter {
   public readonly wipeService: EmergencyWipeService;
   
   public currentMode: OperationalMode = 'FIELD';
+  public currentRole: ResponderRole = 'MEDICAL_RESPONDER';
   public currentOperationId: string = 'OP-TACTICAL-ALPHA';
   public sectorGeohash: string = 'u15ek200';
   private particleFilter?: MobilityParticleFilter;
@@ -89,6 +97,7 @@ export class PeerScribeDaemon extends EventEmitter {
     this.keyPair = generateIdentityKeyPair();
     this.nodeId = config.nodeId || `node_${this.keyPair.publicKey.slice(-8)}`;
     this.currentMode = config.initialMode || 'FIELD';
+    this.currentRole = config.initialRole || 'MEDICAL_RESPONDER';
     this.currentOperationId = config.operationId || 'OP-TACTICAL-ALPHA';
 
     this.db = new PeerScribeDatabase({ dbPath: config.dbPath });
@@ -173,6 +182,73 @@ export class PeerScribeDaemon extends EventEmitter {
     this.emit('modeChanged', { oldMode, newMode, timestamp: Date.now() });
     return this.currentMode;
   }
+  setRole(newRole: ResponderRole): ResponderRole {
+    const oldRole = this.currentRole;
+    this.currentRole = newRole;
+    console.log(`\x1b[35m[ROLE CHANGE]\x1b[0m Node role changed from ${oldRole} -> \x1b[1m${newRole}\x1b[0m`);
+    this.logActivity('SECURITY', `Role Transition: ${oldRole} -> ${newRole}`, { oldRole, newRole });
+    this.emit('roleChanged', { oldRole, newRole, timestamp: Date.now() });
+    return this.currentRole;
+  }
+
+  createOperation(opId: string, name: string, sectorGeohash?: string): void {
+    if (!hasCapability(this.currentRole, 'MANAGE_OPERATION')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, 'SYSTEM', 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'MANAGE_OPERATION',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks MANAGE_OPERATION capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks MANAGE_OPERATION capability`);
+    }
+    this.db.createOperation(opId, name, sectorGeohash);
+    this.logActivity('CRDT', `Created Operation: ${opId} (${name})`, { opId, name, sectorGeohash });
+  }
+
+  switchOperation(opId: string): void {
+    const op = this.db.getOperation(opId);
+    if (!op) throw new Error(`Operation ${opId} does not exist`);
+    const oldOp = this.currentOperationId;
+    this.currentOperationId = opId;
+    if (op.sector_geohash) this.sectorGeohash = op.sector_geohash;
+    console.log(`\x1b[35m[OPERATION SWITCH]\x1b[0m Switched from ${oldOp} -> \x1b[1m${opId}\x1b[0m`);
+    this.logActivity('CRDT', `Switched Active Operation: ${oldOp} -> ${opId}`, { oldOp, newOp: opId });
+    this.emit('operationChanged', { oldOperationId: oldOp, newOperationId: opId });
+  }
+
+  finalizeOperation(opId: string): void {
+    if (!hasCapability(this.currentRole, 'MANAGE_OPERATION')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, 'SYSTEM', 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'MANAGE_OPERATION',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks MANAGE_OPERATION capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks MANAGE_OPERATION capability`);
+    }
+    this.db.updateOperationStatus(opId, 'FINALIZING');
+    this.logActivity('SECURITY', `Operation Status: ${opId} -> FINALIZING`, { opId });
+  }
+
+  archiveOperation(opId: string): any {
+    if (!hasCapability(this.currentRole, 'MANAGE_OPERATION')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, 'SYSTEM', 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'MANAGE_OPERATION',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks MANAGE_OPERATION capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks MANAGE_OPERATION capability`);
+    }
+    const archiveInfo = this.db.archiveOperationData(opId);
+    this.logActivity('SECURITY', `Operation Archived: ${opId}`, archiveInfo);
+    return archiveInfo;
+  }
+
+  listOperations(): any[] {
+    return this.db.listOperations();
+  }
+
 
   createPatient(ephemeralId?: string): CrdtPatientDocument {
     const patientId = `PATIENT_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -284,6 +360,15 @@ export class PeerScribeDaemon extends EventEmitter {
     protocol = 'START_v1.0.0',
     overrideReason?: string
   ): { doc: CrdtPatientDocument; activeTriage: TriageCategory; divergences: any[]; wireTelemetry: WirePacketTelemetry } {
+    if (!hasCapability(this.currentRole, 'OVERRIDE_TRIAGE')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, patientId, 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'OVERRIDE_TRIAGE',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks OVERRIDE_TRIAGE capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks OVERRIDE_TRIAGE capability`);
+    }
     let doc = this.db.getPatientDocument(patientId);
     if (!doc) {
       doc = this.createPatient();
@@ -345,6 +430,15 @@ export class PeerScribeDaemon extends EventEmitter {
     dosage: string,
     route = 'IV'
   ): { doc: CrdtPatientDocument; divergences: any[] } {
+    if (!hasCapability(this.currentRole, 'ADMINISTER_MEDICATION')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, patientId, 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'ADMINISTER_MEDICATION',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks ADMINISTER_MEDICATION capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks ADMINISTER_MEDICATION capability`);
+    }
     let doc = this.db.getPatientDocument(patientId);
     if (!doc) throw new Error(`Patient ${patientId} not found`);
 
@@ -374,6 +468,15 @@ export class PeerScribeDaemon extends EventEmitter {
   }
 
   resolveDivergenceFlag(patientId: string, flagId: string, clinicianSignoffNote: string): CrdtPatientDocument {
+    if (!hasCapability(this.currentRole, 'RESOLVE_DIVERGENCE')) {
+      const auditId = this.generateAuditId();
+      this.db.logAuditEvent(auditId, patientId, 'AUTHORIZATION_FAILED', this.nodeId, {
+        action: 'RESOLVE_DIVERGENCE',
+        role: this.currentRole,
+        reason: `Role ${this.currentRole} lacks RESOLVE_DIVERGENCE capability`
+      });
+      throw new Error(`Unauthorized: Role ${this.currentRole} lacks RESOLVE_DIVERGENCE capability`);
+    }
     let doc = this.db.getPatientDocument(patientId);
     if (!doc) throw new Error(`Patient ${patientId} not found`);
 
@@ -465,8 +568,21 @@ export class PeerScribeDaemon extends EventEmitter {
     return { doc: analyzedDoc, activeTriage, divergences };
   }
 
+  async transcribeAudio(audioBuffer: Buffer | Uint8Array | Float32Array): Promise<WhisperTranscriptionResult> {
+    return await this.whisperEngine.transcribeAudio(audioBuffer);
+  }
+
+  async processVoiceAudio(audioBuffer: Buffer | Uint8Array | Float32Array, patientId?: string): Promise<any> {
+    const whisperResult = await this.whisperEngine.transcribeAudio(audioBuffer);
+    const clinicalResult = this.processVoiceTranscript(whisperResult.transcript, patientId);
+    return {
+      whisper: whisperResult,
+      ...clinicalResult
+    };
+  }
+
   processVoiceTranscript(transcript: string, patientId?: string): any {
-    const aiResult = extractAndEvaluateTriage(transcript);
+    const aiResult = extractWithDualEngine(transcript, { preferSlm: true });
     
     let targetDoc: CrdtPatientDocument | null = null;
 
@@ -576,6 +692,7 @@ export class PeerScribeDaemon extends EventEmitter {
       nodeId: this.nodeId,
       publicKey: this.keyPair.publicKey,
       currentMode: this.currentMode,
+      currentRole: this.currentRole,
       operationId: this.currentOperationId,
       sectorGeohash: this.sectorGeohash,
       totalCasualties: patients.length,

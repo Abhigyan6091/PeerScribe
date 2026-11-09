@@ -659,6 +659,19 @@
         PEERSCRIBE <span style="font-size: 0.7rem; color: #00F5D4; border: 1px solid #00F5D4; padding: 1px 6px; border-radius: 4px; margin-left: 4px; font-weight: 800;">v1.0</span>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <label for="roleSelector" style="font-size: 0.72rem; color: #94A3B8; font-weight: 700;">ROLE:</label>
+          <select id="roleSelector" onchange="changeResponderRole(this.value)" style="background: #111827; color: #38BDF8; border: 1px solid #38BDF8; border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer;">
+            <option value="MEDICAL_RESPONDER">⚕️ MEDICAL RESPONDER</option>
+            <option value="COORDINATOR">📋 COORDINATOR</option>
+            <option value="PARTICIPANT">👤 PARTICIPANT</option>
+            <option value="TRANSPORT">🚑 TRANSPORT</option>
+            <option value="SUPPORT">🛠️ SUPPORT</option>
+          </select>
+        </div>
+        <button type="button" id="btnManageOps" onclick="openOperationsModal()" style="background: rgba(250,204,21,0.15); border: 1px solid #FACC15; color: #FACC15; border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="Manage Tactical Operations & Incidents">
+          📋 OPS
+        </button>
         <button type="button" id="btnCheckDeltaUpdates" onclick="checkDeltaUpdates()" style="background: rgba(0,245,212,0.15); border: 1px solid #00F5D4; color: #00F5D4; border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="Check for in-place differential updates">
           ⚡ DELTA UPDATE
         </button>
@@ -669,7 +682,7 @@
     <!-- Operation Context Card -->
     <section class="operation-card">
       <div style="flex: 1;">
-        <div class="op-name">District 4 Disaster Response #001</div>
+        <div class="op-name"><span id="opTitleDisplay">District 4 Disaster Response #001</span> <span id="opStatusBadge" style="font-size: 0.68rem; background: #059669; color: #FFF; padding: 2px 6px; border-radius: 3px; font-weight: 800; margin-left: 6px;">ACTIVE</span></div>
         <div class="op-meta">Sector Geohash: <strong style="color:#FFF;">u15ek200</strong> | 27.7172° N, 85.3240° E</div>
       </div>
       <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
@@ -921,6 +934,39 @@
     </div>
     <button class="wipe-btn" onclick="triggerEmergencyWipe()">EMERGENCY WIPE</button>
   </footer>
+
+  <!-- Tactical Operation Lifecycle Management Modal -->
+  <div class="modal-overlay" id="operationsModal" style="display: none;">
+    <div class="modal-box" style="max-width: 600px; width: 95%;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1F2839; padding-bottom: 10px; margin-bottom: 12px;">
+        <div style="font-size: 1.15rem; font-weight: 900; color: #FACC15; display: flex; align-items: center; gap: 8px;">
+          📋 Tactical Operation Lifecycle
+        </div>
+        <button type="button" onclick="closeOperationsModal()" style="background: transparent; border: none; color: #94A3B8; font-size: 1.1rem; cursor: pointer;">✕</button>
+      </div>
+
+      <!-- Active Operations List -->
+      <div style="font-size: 0.8rem; font-weight: 700; color: #94A3B8; margin-bottom: 6px;">DISASTER INCIDENTS & OPERATIONS</div>
+      <div id="operationsListContainer" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+        <!-- Filled dynamically -->
+      </div>
+
+      <!-- Create New Operation Form -->
+      <div style="background: #111827; border: 1px solid #1F2839; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
+        <div style="font-size: 0.82rem; font-weight: 800; color: #FFF; margin-bottom: 8px;">+ Initiate New Operation</div>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input type="text" id="newOpIdInput" placeholder="OP ID (e.g. OP-EARTHQUAKE-2026)" style="flex: 1; background: #0B0F17; border: 1px solid #334155; color: #FFF; padding: 6px 10px; border-radius: 4px; font-size: 0.78rem;" />
+          <input type="text" id="newOpTitleInput" placeholder="Operation Title" style="flex: 1.5; background: #0B0F17; border: 1px solid #334155; color: #FFF; padding: 6px 10px; border-radius: 4px; font-size: 0.78rem;" />
+        </div>
+        <button type="button" onclick="createNewOperation()" style="background: #0284C7; color: #FFF; border: none; border-radius: 4px; padding: 6px 14px; font-weight: 800; font-size: 0.78rem; cursor: pointer;">Initiate Operation</button>
+      </div>
+
+      <!-- Coordinator Archiving Notice -->
+      <div style="font-size: 0.72rem; color: #64748B; line-height: 1.4; border-top: 1px solid #1F2839; padding-top: 8px;">
+        ℹ️ Finalizing and Archiving requires <strong>COORDINATOR</strong> role. Archiving encrypts the operational incident snapshot while strictly preserving individual Personal Medical Profile vaults.
+      </div>
+    </div>
+  </div>
 
   <!-- Semantic Divergence Resolution Modal -->
   <div class="modal-overlay" id="divergenceModal">

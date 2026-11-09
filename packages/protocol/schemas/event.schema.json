@@ -50,13 +50,24 @@
         "SOS_CREATED",
         "VAULT_SNAPSHOT_ATTACHED",
         "DIVERGENCE_ACKNOWLEDGED",
-        "DIVERGENCE_RESOLVED"
+        "DIVERGENCE_RESOLVED",
+        "AUTHORIZATION_FAILED"
       ]
     },
     "actor_id": {
       "type": "string",
       "minLength": 3,
       "maxLength": 64
+    },
+    "actor_role": {
+      "type": "string",
+      "enum": [
+        "PARTICIPANT",
+        "MEDICAL_RESPONDER",
+        "COORDINATOR",
+        "TRANSPORT",
+        "SUPPORT"
+      ]
     },
     "actor_sequence": {
       "type": "integer",

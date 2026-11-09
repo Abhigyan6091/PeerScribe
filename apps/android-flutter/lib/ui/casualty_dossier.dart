@@ -11,8 +11,13 @@ import 'search_heatmap.dart';
 
 class CasualtyDossierScreen extends StatefulWidget {
   final String patientId;
+  final ResponderRole currentRole;
 
-  const CasualtyDossierScreen({Key? key, required this.patientId}) : super(key: key);
+  const CasualtyDossierScreen({
+    Key? key,
+    required this.patientId,
+    this.currentRole = ResponderRole.medicalResponder,
+  }) : super(key: key);
 
   @override
   State<CasualtyDossierScreen> createState() => _CasualtyDossierScreenState();
@@ -101,6 +106,12 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
   }
 
   void _showStartTriageDialog() {
+    if (widget.currentRole == ResponderRole.participant) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('⛔ Role PARTICIPANT lacks TRIAGE_OVERRIDE capability.')),
+      );
+      return;
+    }
     bool canWalk = false;
     bool breathing = true;
     int respRate = 24;
