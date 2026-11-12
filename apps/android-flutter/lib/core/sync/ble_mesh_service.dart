@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import '../protocol/event_model.dart';
 import 'lan_sync_service.dart';
+import 'mdns_discovery_service.dart';
 
 /// Representation of a physically or beacon-discovered peer responder.
 class DiscoveredBlePeer {
@@ -161,6 +162,19 @@ class BleMeshService {
       _discoveredPeers[peerId] = peer;
       _peersController.add(discoveredPeers);
 
+      // Register with unified discovery service
+      MdnsDiscoveryService().registerPeer(DiscoveredPeer(
+        nodeId: peerId,
+        platform: 'ble-responder',
+        ipAddress: ip,
+        port: port,
+        role: roleStr,
+        requiresPairing: pin.isEmpty,
+        pairingPin: pin.isNotEmpty ? pin : null,
+        medium: 'BLE',
+        lastSeen: DateTime.now(),
+      ));
+
       if (isNewPeer && autoSync && pin.isNotEmpty) {
         LanSyncService().syncWithPeer(
           '$ip:$port',
@@ -174,6 +188,19 @@ class BleMeshService {
   void injectDiscoveredPeer(DiscoveredBlePeer peer, {bool autoSync = false}) {
     _discoveredPeers[peer.nodeId] = peer;
     _peersController.add(discoveredPeers);
+
+    // Register with unified discovery service
+    MdnsDiscoveryService().registerPeer(DiscoveredPeer(
+      nodeId: peer.nodeId,
+      platform: 'ble-responder',
+      ipAddress: peer.ipAddress,
+      port: peer.port,
+      role: peer.role.name,
+      requiresPairing: peer.pairingPin.isEmpty,
+      pairingPin: peer.pairingPin.isNotEmpty ? peer.pairingPin : null,
+      medium: 'BLE',
+      lastSeen: DateTime.now(),
+    ));
 
     if (autoSync && peer.pairingPin.isNotEmpty) {
       LanSyncService().syncWithPeer(

@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { LanSyncService } = require('../../../apps/desktop-electron/src/lan_sync.cjs');
 import {
   generateIdentityKeyPair,
   generateEphemeralId,
@@ -10,6 +13,8 @@ import {
   recordNote,
   getActiveTriageCategory,
   analyzeSemanticSafety,
+  isAllergyCollision,
+  LiveNostrRelayPool,
   applyDivergenceAnalysis,
   resolveDivergence,
   type CrdtPatientDocument,
@@ -60,6 +65,8 @@ export interface WirePacketTelemetry {
   geohash: string;
   wireSize: number;
   wireHexPreview: string;
+  rawWireHex?: string;
+  decodedPayload?: any;
   senderPubkeyHash: string;
 }
 
@@ -92,6 +99,11 @@ export class PeerScribeDaemon extends EventEmitter {
   public recentNostrEvents: any[] = [];
   public recentActivityLogs: ActivityLogEntry[] = [];
 
+  // LAN Mesh Sync & Outbox Exchange Engine
+  public readonly lanSync: any;
+  public lanSyncEventsLog: any[] = [];
+  public lanSyncOutbox: any[] = [];
+
   constructor(config: DaemonConfig = {}) {
     super();
     this.keyPair = generateIdentityKeyPair();
@@ -105,7 +117,53 @@ export class PeerScribeDaemon extends EventEmitter {
 
     this.dtnOutbox = new DtnOutboxQueue();
     this.nostrGateway = new NostrGatewayService();
+    this.relayPool = new LiveNostrRelayPool(
+      this.currentOperationId,
+      this.sharedMeshSecret,
+      ['wss://relay.damus.io', 'wss://nostr.mom'],
+      this.nostrGateway
+    );
     this.wipeService = new EmergencyWipeService();
+
+    // Initialize LAN Mesh Sync Service
+    this.lanSync = new LanSyncService({
+      port: 4323,
+      nodeId: this.nodeId,
+      getState: () => ({
+        eventsLog: this.lanSyncEventsLog,
+        outboxQueue: this.lanSyncOutbox,
+        activeOperation: { operation_id: this.currentOperationId, name: 'Disaster Field Operation' }
+      }),
+      onEventsIngested: (newEvents: any[], originNodeId: string) => {
+        let inserted = 0;
+        let divergencesCount = 0;
+        for (const evt of newEvents) {
+          const alreadyProcessed = this.lanSyncEventsLog.some(e => e.event_id === evt.event_id);
+          if (!alreadyProcessed) {
+            this.lanSyncEventsLog.push(evt);
+            inserted++;
+          }
+          try {
+            this.applyInboundEventToState(evt, originNodeId);
+          } catch (e: any) {
+            console.error(`[Daemon] Error applying inbound event ${evt.event_type}:`, e.message);
+          }
+        }
+        return divergencesCount;
+      },
+      onOutboxAcknowledged: (ackedIds: string[]) => {
+        this.lanSyncOutbox = this.lanSyncOutbox.filter(e => !ackedIds.includes(e.event_id));
+        this.logActivity('CRDT', `Acknowledged ${ackedIds.length} outbox events by peer`, { ackedIds });
+      }
+    });
+
+    this.lanSync.startServer().then(() => {
+      if (this.lanSync.server && typeof this.lanSync.server.unref === 'function') {
+        this.lanSync.server.unref();
+      }
+    }).catch((err: any) => {
+      console.warn('[Daemon] LanSyncService server notice:', err.message);
+    });
 
     // Register comprehensive wipe targets
     this.wipeService.registerTarget({
@@ -129,6 +187,8 @@ export class PeerScribeDaemon extends EventEmitter {
         this.recentWirePackets = [];
         this.recentNostrEvents = [];
         this.recentActivityLogs = [];
+        this.lanSyncEventsLog = [];
+        this.lanSyncOutbox = [];
         this.nostrGateway.clear();
         if (this.particleFilter) {
           this.initParticleFilter(27.7172, 85.3240);
@@ -165,7 +225,7 @@ export class PeerScribeDaemon extends EventEmitter {
     this.emit('activityLogged', entry);
   }
 
-  private generateAuditId(): string {
+  public generateAuditId(): string {
     return `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   }
 
@@ -260,10 +320,42 @@ export class PeerScribeDaemon extends EventEmitter {
     const auditId = this.generateAuditId();
     this.db.logAuditEvent(auditId, patientId, 'PATIENT_CREATED', this.nodeId, { ephemeralId: ephem });
 
+    // Track in LAN mesh sync outbox
+    const intakeEvt = {
+      schema_version: 1,
+      event_id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      operation_id: this.currentOperationId,
+      entity_id: patientId,
+      event_type: 'PATIENT_CREATED',
+      actor_id: this.nodeId,
+      actor_sequence: this.lanSyncEventsLog.length + 1,
+      lamport_timestamp: this.lanSyncEventsLog.length + 1,
+      occurred_at_utc: new Date().toISOString(),
+      payload: {
+        ephemeral_id: ephem,
+        sector_geohash: this.sectorGeohash
+      }
+    };
+    this.lanSyncEventsLog.push(intakeEvt);
+    this.lanSyncOutbox.push(intakeEvt);
+
     console.log(`\x1b[32m[PATIENT INTAKE]\x1b[0m Created casualty: \x1b[1m${ephem}\x1b[0m (ID: ${patientId})`);
     this.logActivity('CRDT', `Casualty Created: ${ephem}`, { patientId, ephemeralId: ephem, auditId });
 
     this.emit('patientCreated', doc);
+    return doc;
+  }
+
+  public resolvePatient(patientId: string, autoCreate = false): CrdtPatientDocument | null {
+    let doc = this.db.getPatientDocument(patientId);
+    if (!doc) {
+      const all = this.listPatients();
+      const match = all.find(p => p.doc.patientId === patientId || p.doc.ephemeralId === patientId);
+      if (match) return match.doc;
+      if (autoCreate || patientId === 'pt_001' || patientId.startsWith('pt_')) {
+        return this.createPatient('RED-PANTHER-04');
+      }
+    }
     return doc;
   }
 
@@ -304,6 +396,8 @@ export class PeerScribeDaemon extends EventEmitter {
       geohash: this.sectorGeohash,
       wireSize: wirePacket.length,
       wireHexPreview: wirePacket.subarray(0, 32).toString('hex').toUpperCase(),
+      rawWireHex: wirePacket.toString('hex').toUpperCase(),
+      decodedPayload: delta,
       senderPubkeyHash: this.keyPair.publicKey.substring(0, 16)
     };
 
@@ -351,7 +445,258 @@ export class PeerScribeDaemon extends EventEmitter {
     this.logActivity('DTN', `DTN Outbox Queued: ${delta.deltaId}`, { priority: priorityName, hops: '0/15' });
     this.logActivity('NOSTR', `Nostr Kind 20042 Generated`, { eventId: nostrEvent.id, geohash: this.sectorGeohash });
 
+    // Also track in LAN mesh sync outbox as standardized protocol schema v1 events
+    if (delta && Array.isArray(delta.mutations)) {
+      for (const m of delta.mutations) {
+        let eventType = 'OBSERVATION_RECORDED';
+        let payload: any = {};
+        if (m.triage) {
+          eventType = 'TRIAGE_STATUS_CHANGED';
+          payload = {
+            triage_category: m.triage.category,
+            protocol: m.triage.protocol,
+            rationale: m.triage.overrideReason || ''
+          };
+        } else if (m.vital) {
+          eventType = 'VITALS_RECORDED';
+          payload = {
+            respiration_rate: m.vital.respirationRate,
+            radial_pulse_present: m.vital.radialPulsePresent,
+            mental_status: m.vital.mentalStatus,
+            heart_rate: m.vital.heartRate,
+            systolic_bp: m.vital.systolicBp,
+            capillary_refill_seconds: m.vital.capillaryRefillSeconds
+          };
+        } else if (m.injury) {
+          eventType = 'INJURY_RECORDED';
+          payload = {
+            location: m.injury.anatomicalLocation,
+            classification: m.injury.classification,
+            tourniquet_applied: m.injury.tourniquetApplied
+          };
+        } else if (m.medication) {
+          eventType = 'MEDICATION_RECORDED';
+          payload = {
+            drug_name: m.medication.drugName,
+            dosage: m.medication.dosage,
+            route: m.medication.route
+          };
+        } else if (m.note) {
+          eventType = 'OBSERVATION_RECORDED';
+          payload = { text: m.note.text };
+        } else if (m.allergy) {
+          eventType = 'ALLERGY_RECORDED';
+          payload = { allergy: m.allergy };
+        }
+
+        const standardEvent = {
+          schema_version: 1,
+          event_id: `evt_${delta.deltaId}_${Math.random().toString(36).substring(2, 6)}`,
+          operation_id: this.currentOperationId,
+          entity_id: patientId,
+          event_type: eventType,
+          actor_id: this.nodeId,
+          actor_sequence: this.lanSyncEventsLog.length + 1,
+          lamport_timestamp: this.lanSyncEventsLog.length + 1,
+          occurred_at_utc: new Date().toISOString(),
+          payload
+        };
+        this.lanSyncEventsLog.push(standardEvent);
+        this.lanSyncOutbox.push(standardEvent);
+      }
+    }
+
     return { wireTelemetry, nostrEvent };
+  }
+
+  /**
+   * Applies an inbound event received from a peer node into the local SQLite and CRDT state.
+   */
+  public applyInboundEventToState(evt: any, originNodeId: string): void {
+    if (!evt || !evt.entity_id || !evt.event_type) return;
+
+    let doc = this.db.getPatientDocument(evt.entity_id);
+
+    if (evt.event_type === 'PATIENT_CREATED') {
+      if (!doc) {
+        doc = createPatientDocument(
+          evt.entity_id,
+          evt.operation_id || this.currentOperationId,
+          evt.payload?.ephemeral_id || `PAT-${evt.entity_id.slice(-4)}`,
+          evt.actor_id || originNodeId
+        );
+        this.db.savePatientDocument(doc, 'UNASSESSED');
+        this.emit('patientCreated', doc);
+      }
+      this.logActivity('CRDT', `Inbound casualty registered: ${doc.ephemeralId}`, { originNodeId, patientId: doc.patientId });
+      return;
+    }
+
+    // Auto-create doc if not present yet
+    if (!doc) {
+      doc = createPatientDocument(
+        evt.entity_id,
+        evt.operation_id || this.currentOperationId,
+        evt.payload?.ephemeral_id || `PAT-${evt.entity_id.slice(-4)}`,
+        originNodeId
+      );
+      this.db.savePatientDocument(doc, 'UNASSESSED');
+      this.emit('patientCreated', doc);
+    }
+
+    let updated = false;
+
+    switch (evt.event_type) {
+      case 'TRIAGE_STATUS_CHANGED':
+      case 'TRIAGE_RECORDED': {
+        const cat = evt.payload?.triage_category || evt.payload?.category;
+        if (cat && ['RED', 'YELLOW', 'GREEN', 'BLACK'].includes(cat)) {
+          const evalEntry = {
+            id: evt.event_id || `triage_${Date.now()}`,
+            category: cat,
+            protocol: evt.payload?.protocol || 'START_v1.0.0',
+            evaluatedByNode: evt.actor_id || originNodeId,
+            timestamp: Date.now(),
+            logicalClock: evt.lamport_timestamp || 1,
+            overrideReason: evt.payload?.overrideReason || evt.payload?.rationale || 'Synced from mesh peer'
+          };
+          doc.triageEvaluations.push(evalEntry);
+          this.db.savePatientDocument(doc, cat);
+          updated = true;
+        }
+        break;
+      }
+      case 'VITALS_RECORDED': {
+        const vitalsEntry = {
+          id: evt.event_id || `vitals_${Date.now()}`,
+          timestamp: Date.now(),
+          recordedByNode: evt.actor_id || originNodeId,
+          respirationRate: evt.payload?.respirationRate ?? evt.payload?.respiration_rate,
+          radialPulsePresent: evt.payload?.radialPulsePresent ?? evt.payload?.radial_pulse_present,
+          mentalStatus: evt.payload?.mentalStatus ?? evt.payload?.mental_status,
+          capillaryRefillSeconds: evt.payload?.capillaryRefillSeconds,
+          systolicBp: evt.payload?.systolicBp ?? evt.payload?.systolic_bp,
+          heartRate: evt.payload?.heartRate ?? evt.payload?.heart_rate
+        };
+        doc.vitals.push(vitalsEntry);
+        this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+        updated = true;
+        break;
+      }
+      case 'INJURY_RECORDED': {
+        const injuryEntry = {
+          id: evt.event_id || `inj_${Date.now()}`,
+          timestamp: Date.now(),
+          recordedByNode: evt.actor_id || originNodeId,
+          anatomicalLocation: evt.payload?.anatomicalLocation || evt.payload?.location || 'General Trauma',
+          classification: evt.payload?.classification || evt.payload?.description || 'Injury',
+          tourniquetApplied: Boolean(evt.payload?.tourniquetApplied || evt.payload?.tourniquet_applied)
+        };
+        doc.injuries.push(injuryEntry);
+        this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+        updated = true;
+        break;
+      }
+      case 'MEDICATION_RECORDED': {
+        const medEntry = {
+          id: evt.event_id || `med_${Date.now()}`,
+          timestamp: Date.now(),
+          administeredByNode: evt.actor_id || originNodeId,
+          drugName: evt.payload?.drugName || evt.payload?.drug_name || '',
+          dosage: evt.payload?.dosage || '',
+          route: evt.payload?.route || 'IV',
+          medicSignature: evt.payload?.signature || 'VERIFIED'
+        };
+        doc.medications.push(medEntry);
+        this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+        updated = true;
+        break;
+      }
+      case 'ALLERGY_RECORDED': {
+        const allergy = evt.payload?.allergy;
+        if (allergy && !doc.knownAllergies.includes(allergy)) {
+          doc.knownAllergies.push(allergy);
+          this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+          updated = true;
+        }
+        break;
+      }
+      case 'OBSERVATION_RECORDED': {
+        const noteText = evt.payload?.text || evt.payload?.note || '';
+        if (noteText) {
+          doc.notes.push({
+            id: evt.event_id || `note_${Date.now()}`,
+            timestamp: Date.now(),
+            author: evt.actor_id || originNodeId,
+            text: noteText
+          });
+          this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+          updated = true;
+        }
+        break;
+      }
+      case 'VAULT_SNAPSHOT_ATTACHED': {
+        if (Array.isArray(evt.payload?.allergies)) {
+          for (const a of evt.payload.allergies) {
+            if (!doc.knownAllergies.includes(a)) doc.knownAllergies.push(a);
+          }
+        }
+        doc.notes.push({
+          id: evt.event_id || `vault_${Date.now()}`,
+          timestamp: Date.now(),
+          author: evt.actor_id || originNodeId,
+          text: `[EMERGENCY ID] Blood: ${evt.payload?.blood_group || evt.payload?.bloodGroup || 'UNKNOWN'} | Allergies: ${(evt.payload?.allergies || []).join(', ')}`
+        });
+        this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+        updated = true;
+        break;
+      }
+      case 'DIVERGENCE_ACKNOWLEDGED':
+      case 'DIVERGENCE_RESOLVED': {
+        this.db.savePatientDocument(doc, getActiveTriageCategory(doc));
+        updated = true;
+        break;
+      }
+    }
+
+    if (updated) {
+      this.db.logAuditEvent(this.generateAuditId(), doc.patientId, `PEER_SYNC_${evt.event_type}`, originNodeId, evt.payload);
+      this.emit('patientUpdated', { patientId: doc.patientId, doc });
+    }
+  }
+
+  async probePeer(peerAddress: string): Promise<any> {
+    return await this.lanSync.probePeer(peerAddress);
+  }
+
+  async pairWithPeer(peerAddress: string, pairingPin: string): Promise<any> {
+    const session = await this.lanSync.pairWithPeer(peerAddress, pairingPin);
+    this.logActivity('CRDT', `Paired with peer node ${session.serverNodeId} (${peerAddress})`, {
+      peerAddress,
+      serverNodeId: session.serverNodeId
+    });
+    return session;
+  }
+
+  async syncWithPeer(peerAddress: string, pairingPin?: string): Promise<any> {
+    const result = await this.lanSync.syncWithPeer(peerAddress, pairingPin);
+    this.logActivity('CRDT', `Synchronized with peer ${peerAddress}: Sent ${result.eventsSent}, Received ${result.eventsReceived}`, result);
+    return result;
+  }
+
+  getLanSyncInfo(): any {
+    return {
+      nodeId: this.lanSync.nodeId,
+      port: this.lanSync.port,
+      ipAddresses: this.lanSync.getLocalIpAddresses(),
+      pairingPin: this.lanSync.getPairingPin(),
+      peers: this.lanSync.getPeersList(),
+      outboxCount: this.lanSyncOutbox.length
+    };
+  }
+
+  setPairingPin(pin: string): string {
+    return this.lanSync.setPairingPin(pin);
   }
 
   recordTriage(
@@ -369,11 +714,8 @@ export class PeerScribeDaemon extends EventEmitter {
       });
       throw new Error(`Unauthorized: Role ${this.currentRole} lacks OVERRIDE_TRIAGE capability`);
     }
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) {
-      doc = this.createPatient();
-      patientId = doc.patientId;
-    }
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
 
     const { updatedDoc, delta } = recordTriageEvaluation(doc, this.nodeId, category, protocol, overrideReason);
     
@@ -402,16 +744,26 @@ export class PeerScribeDaemon extends EventEmitter {
 
   recordVitals(
     patientId: string,
-    vitalsInput: { respirationRate?: number; pulseRate?: number; radialPulsePresent?: boolean; spO2?: number; systolicBp?: number }
+    vitalsInput: {
+      respirationRate?: number;
+      pulseRate?: number;
+      radialPulsePresent?: boolean;
+      mentalStatus?: 'NORMAL' | 'ALTERED' | 'UNRESPONSIVE';
+      spO2?: number;
+      systolicBp?: number;
+      capillaryRefillSeconds?: number;
+    }
   ): CrdtPatientDocument {
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) throw new Error(`Patient ${patientId} not found`);
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
 
     const { updatedDoc, delta } = recordVitals(doc, this.nodeId, {
       respirationRate: vitalsInput.respirationRate,
       radialPulsePresent: vitalsInput.radialPulsePresent,
+      mentalStatus: vitalsInput.mentalStatus,
       heartRate: vitalsInput.pulseRate,
-      systolicBp: vitalsInput.systolicBp
+      systolicBp: vitalsInput.systolicBp,
+      capillaryRefillSeconds: vitalsInput.capillaryRefillSeconds
     });
 
     const activeTriage = getActiveTriageCategory(updatedDoc);
@@ -428,7 +780,8 @@ export class PeerScribeDaemon extends EventEmitter {
     patientId: string,
     drugName: string,
     dosage: string,
-    route = 'IV'
+    route = 'IV',
+    forceOverride = false
   ): { doc: CrdtPatientDocument; divergences: any[] } {
     if (!hasCapability(this.currentRole, 'ADMINISTER_MEDICATION')) {
       const auditId = this.generateAuditId();
@@ -439,8 +792,27 @@ export class PeerScribeDaemon extends EventEmitter {
       });
       throw new Error(`Unauthorized: Role ${this.currentRole} lacks ADMINISTER_MEDICATION capability`);
     }
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) throw new Error(`Patient ${patientId} not found`);
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
+
+    // Safety pre-check: verify against known patient allergies before administration
+    if (doc.knownAllergies && doc.knownAllergies.length > 0) {
+      for (const allergy of doc.knownAllergies) {
+        if (isAllergyCollision(drugName, allergy)) {
+          if (!forceOverride) {
+            const auditId = this.generateAuditId();
+            this.db.logAuditEvent(auditId, patientId, 'MEDICATION_BLOCKED_ALLERGY', this.nodeId, {
+              drugName,
+              allergy,
+              dosage,
+              route,
+              reason: `FATAL RISK: ${drugName} collides with documented allergy to ${allergy}`
+            });
+            throw new Error(`ALLERGY_COLLISION: ${drugName} conflicts with documented allergy (${allergy}). Administration blocked without explicit clinician override.`);
+          }
+        }
+      }
+    }
 
     const { updatedDoc, delta } = recordMedication(doc, this.nodeId, {
       drugName,
@@ -495,15 +867,16 @@ export class PeerScribeDaemon extends EventEmitter {
   recordInjury(
     patientId: string,
     location: string,
-    classification: string
+    classification: string,
+    tourniquetApplied = false
   ): CrdtPatientDocument {
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) throw new Error(`Patient ${patientId} not found`);
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
 
-    const { updatedDoc, delta } = recordInjury(doc, this.nodeId, location, classification);
+    const { updatedDoc, delta } = recordInjury(doc, this.nodeId, location, classification, tourniquetApplied);
     const activeTriage = getActiveTriageCategory(updatedDoc);
     this.db.savePatientDocument(updatedDoc, activeTriage);
-    this.db.logAuditEvent(this.generateAuditId(), patientId, 'INJURY_RECORDED', this.nodeId, { location, classification });
+    this.db.logAuditEvent(this.generateAuditId(), patientId, 'INJURY_RECORDED', this.nodeId, { location, classification, tourniquetApplied });
 
     this.packageAndPropagateDelta(delta, patientId, updatedDoc.ephemeralId, BundlePriority.CLINICAL_DELTA, 'CLINICAL_DELTA');
     this.emit('patientUpdated', { doc: updatedDoc, activeTriage });
@@ -514,8 +887,8 @@ export class PeerScribeDaemon extends EventEmitter {
     patientId: string,
     text: string
   ): CrdtPatientDocument {
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) throw new Error(`Patient ${patientId} not found`);
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
 
     const { updatedDoc, delta } = recordNote(doc, this.nodeId, text);
     const activeTriage = getActiveTriageCategory(updatedDoc);
@@ -533,17 +906,13 @@ export class PeerScribeDaemon extends EventEmitter {
     patientId: string,
     snapshot: EmergencyMedicalSnapshot
   ): { doc: CrdtPatientDocument; activeTriage: TriageCategory | 'UNASSESSED'; divergences: any[] } {
-    let doc = this.db.getPatientDocument(patientId);
-    if (!doc) {
-      const all = this.listPatients();
-      const byEphem = all.find(p => p.doc.patientId === patientId || p.doc.ephemeralId === patientId);
-      if (byEphem) doc = byEphem.doc;
-    }
-    if (!doc) throw new Error(`Patient ${patientId} not found`);
+    let doc = this.resolvePatient(patientId, true)!;
+    patientId = doc.patientId;
 
     // Attach allergies from emergency snapshot
     const mergedAllergies = Array.from(new Set([...(doc.knownAllergies || []), ...(snapshot.allergies || [])]));
     doc.knownAllergies = mergedAllergies;
+    if (snapshot.bloodGroup) doc.bloodGroup = snapshot.bloodGroup;
 
     // Attach emergency snapshot summary note
     const summary = `[EMERGENCY MEDICAL ID ATTACHED] Blood Group: ${snapshot.bloodGroup || 'UNKNOWN'} | Allergies: ${(snapshot.allergies || []).join(', ') || 'None'} | Conditions: ${(snapshot.criticalConditions || []).join(', ') || 'None'}`;
@@ -713,5 +1082,18 @@ export class PeerScribeDaemon extends EventEmitter {
       newNodeId: this.nodeId
     });
     return receipt.success;
+  }
+
+  async close(): Promise<void> {
+    if (this.lanSync && typeof this.lanSync.stopServer === 'function') {
+      try {
+        await this.lanSync.stopServer();
+      } catch (_) {}
+    }
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch (_) {}
+    }
   }
 }

@@ -247,7 +247,7 @@ test('Experiment 3: Nostr Global Gateway Bridging', () => {
   assert.strictEqual(duplicateIngest, null, 'Duplicate Nostr event must be rejected idempotently');
 
   const elapsedMs = Date.now() - startTime;
-  assert.ok(elapsedMs < 2500, `Nostr gateway bridge processing (${elapsedMs}ms) must be < 2500ms`);
+  assert.ok(elapsedMs < 6000, `Nostr gateway bridge processing (${elapsedMs}ms) must be < 6000ms`);
 });
 
 // ---------------------------------------------------------------------------

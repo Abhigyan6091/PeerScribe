@@ -377,6 +377,7 @@ export class LiveNostrRelayPool {
   private isDestroyed = false;
   public readonly subscriptionId: string;
   public activeRelayCount = 0;
+  private relayAcks: Map<string, Array<{ relay: string; accepted: boolean; message?: string; timestamp: number }>> = new Map();
 
   public readonly operationId: string;
   public readonly sharedSecret: Buffer;
@@ -441,6 +442,18 @@ export class LiveNostrRelayPool {
           if (!Array.isArray(parsed)) return;
 
           const [type, ...args] = parsed;
+          if (type === 'OK' && args.length >= 2) {
+            const [eventId, accepted, message] = args;
+            if (!this.relayAcks.has(eventId)) {
+              this.relayAcks.set(eventId, []);
+            }
+            this.relayAcks.get(eventId).push({
+              relay: url,
+              accepted: Boolean(accepted),
+              message: typeof message === 'string' ? message : undefined,
+              timestamp: Date.now()
+            });
+          }
           if (type === 'EVENT' && args.length >= 2) {
             const nostrEvt: NostrEvent = args[1];
             const decrypted = this.gateway.ingestRelayEvent(nostrEvt, this.sharedSecret);
@@ -506,6 +519,29 @@ export class LiveNostrRelayPool {
     }
 
     return { publishedCount, errors };
+  }
+
+  getAcks(eventId?: string): Array<{ relay: string; accepted: boolean; message?: string; timestamp: number }> {
+    if (eventId) {
+      return this.relayAcks.get(eventId) || [];
+    }
+    const all: Array<{ relay: string; accepted: boolean; message?: string; timestamp: number }> = [];
+    for (const acks of this.relayAcks.values()) {
+      all.push(...acks);
+    }
+    return all;
+  }
+
+  recordLocalAck(eventId: string, relay = 'local_gateway', accepted = true, message = 'Acknowledged by relay pool'): void {
+    if (!this.relayAcks.has(eventId)) {
+      this.relayAcks.set(eventId, []);
+    }
+    this.relayAcks.get(eventId).push({
+      relay,
+      accepted,
+      message,
+      timestamp: Date.now()
+    });
   }
 
   /**

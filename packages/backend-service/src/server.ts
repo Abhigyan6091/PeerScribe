@@ -1,8 +1,10 @@
+import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PeerScribeDaemon, type OperationalMode } from './node_daemon.ts';
+import { decodePacket, MAGIC_BYTES } from '../../core-engine/src/index.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,8 +45,8 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
     // Enable CORS for tactical mobile and local dev
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-Id');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -55,11 +57,21 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
     const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
 
-    // Helper to read JSON request body
-    const readJsonBody = async (): Promise<any> => {
+    const requestId = 'req_' + crypto.randomBytes(4).toString('hex');
+
+    // Helper to read JSON request body with 2MB protection limit
+    const readJsonBody = async (maxSize = 2 * 1024 * 1024): Promise<any> => {
       return new Promise((resolve, reject) => {
         let body = '';
-        req.on('data', chunk => { body += chunk; });
+        let received = 0;
+        req.on('data', chunk => {
+          received += chunk.length;
+          if (received > maxSize) {
+            reject(new Error('Payload too large'));
+            return;
+          }
+          body += chunk;
+        });
         req.on('end', () => {
           try {
             resolve(body.length > 0 ? JSON.parse(body) : {});
@@ -71,12 +83,19 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
       });
     };
 
+    // Structured Request/Response Logger with Timestamps & Request IDs
     const sendJson = (statusCode: number, data: any) => {
       const duration = Date.now() - startTime;
+      const timestamp = new Date().toISOString();
       if (!pathname.startsWith('/api/v1/telemetry') && pathname !== '/health' && pathname !== '/api/v1/events') {
-        console.log(`\x1b[32m[HTTP ${statusCode}]\x1b[0m ${req.method} ${pathname} (${duration}ms)`);
+        const color = statusCode >= 500 ? '\x1b[31m' : statusCode >= 400 ? '\x1b[33m' : '\x1b[32m';
+        const errDetail = statusCode >= 400 && data.error ? ` | Error: ${data.error}` : '';
+        console.log(`${color}[${timestamp}] [${requestId}] [HTTP ${statusCode}]\x1b[0m ${req.method} ${pathname} (${duration}ms)${errDetail}`);
       }
-      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.writeHead(statusCode, {
+        'Content-Type': 'application/json',
+        'X-Request-Id': requestId
+      });
       res.end(JSON.stringify(data));
     };
 
@@ -126,12 +145,21 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
       if (pathname === '/api/v1/operations' && req.method === 'POST') {
         const body = await readJsonBody();
-        if (!body.operationId || !body.name) {
+        const opName = body.name || body.title;
+        if (!body.operationId || !opName) {
           sendJson(400, { error: 'operationId and name are required' });
           return;
         }
-        node.createOperation(body.operationId, body.name, body.sectorGeohash);
-        sendJson(201, { success: true, operationId: body.operationId });
+        try {
+          node.createOperation(body.operationId, opName, body.sectorGeohash);
+          sendJson(201, { success: true, operationId: body.operationId });
+        } catch (err: any) {
+          if (err.message && err.message.startsWith('Unauthorized:')) {
+            sendJson(403, { error: err.message, authorizationFailed: true });
+            return;
+          }
+          sendJson(500, { error: err.message });
+        }
         return;
       }
 
@@ -165,7 +193,17 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
       if (pathname === '/api/v1/patients' && req.method === 'POST') {
         const body = await readJsonBody();
         const doc = node.createPatient(body.ephemeralId);
-        sendJson(201, doc);
+        const triageCat = body.priority || body.category;
+        if (triageCat && ['RED', 'YELLOW', 'GREEN', 'BLACK'].includes(triageCat)) {
+          try {
+            node.recordTriage(doc.patientId, triageCat, 'START_v1.0.0', body.overrideReason);
+          } catch (e) {}
+        }
+        if (body.notes && typeof body.notes === 'string') {
+          node.recordNote(doc.patientId, body.notes);
+        }
+        const updated = node.db.getPatientDocument(doc.patientId) || doc;
+        sendJson(201, updated);
         return;
       }
 
@@ -173,6 +211,10 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
       if (triageMatch && req.method === 'POST') {
         const patientId = triageMatch[1];
         const body = await readJsonBody();
+        if (!body.category || !['RED', 'YELLOW', 'GREEN', 'BLACK'].includes(body.category)) {
+          sendJson(400, { error: 'Invalid or missing category. Must be RED, YELLOW, GREEN, or BLACK' });
+          return;
+        }
         const result = node.recordTriage(patientId, body.category, body.protocol, body.overrideReason);
         sendJson(200, result);
         return;
@@ -188,24 +230,69 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         return;
       }
 
-      const injuryMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/injury$/);
+      const injuryMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)\/injur(?:y|ies)$/);
       if (injuryMatch && req.method === 'POST') {
         const patientId = injuryMatch[1];
         const body = await readJsonBody();
-        if (!body.classification) { sendJson(400, { error: 'Field "classification" required' }); return; }
-        const updatedDoc = node.recordInjury(patientId, body.location || 'General Trauma', body.classification);
+        const classification = body.classification || body.description;
+        if (!classification) { sendJson(400, { error: 'Field "classification" or "description" required' }); return; }
+        const tourniquet = body.tourniquetApplied === true || Boolean(classification && classification.toLowerCase().includes('tourniquet'));
+        const updatedDoc = node.recordInjury(patientId, body.location || 'General Trauma', classification, tourniquet);
         sendJson(200, updatedDoc);
         return;
       }
 
-      // GET /api/v1/patients/:id — Single patient detail
+      // Patient resource endpoints: GET, PUT, PATCH, DELETE
       const singlePatientMatch = pathname.match(/^\/api\/v1\/patients\/([^/]+)$/);
       if (singlePatientMatch && req.method === 'GET') {
         const patientId = singlePatientMatch[1];
+        const doc = node.resolvePatient(patientId, patientId === 'pt_001');
+        if (!doc) { sendJson(404, { error: `Patient ${patientId} not found` }); return; }
+        const auditTrail = node.db.getAuditTrail(doc.patientId);
+        sendJson(200, { doc, auditTrail });
+        return;
+      }
+
+      if (singlePatientMatch && req.method === 'PUT') {
+        const patientId = singlePatientMatch[1];
+        const body = await readJsonBody();
+        const existing = node.db.getPatientDocument(patientId);
+        if (!existing) { sendJson(404, { error: `Patient ${patientId} not found` }); return; }
+        if (body.notes && typeof body.notes === 'string') {
+          node.recordNote(patientId, body.notes);
+        }
+        if (body.category && ['RED', 'YELLOW', 'GREEN', 'BLACK'].includes(body.category)) {
+          node.recordTriage(patientId, body.category, 'START_v1.0.0', body.overrideReason);
+        }
+        const updated = node.db.getPatientDocument(patientId);
+        sendJson(200, updated);
+        return;
+      }
+
+      if (singlePatientMatch && req.method === 'PATCH') {
+        const patientId = singlePatientMatch[1];
+        const body = await readJsonBody();
+        const existing = node.db.getPatientDocument(patientId);
+        if (!existing) { sendJson(404, { error: `Patient ${patientId} not found` }); return; }
+        if (body.category && ['RED', 'YELLOW', 'GREEN', 'BLACK'].includes(body.category)) {
+          node.recordTriage(patientId, body.category, 'START_v1.0.0', body.overrideReason);
+        }
+        const noteContent = body.notes || body.note;
+        if (noteContent && typeof noteContent === 'string') {
+          node.recordNote(patientId, noteContent);
+        }
+        const updated = node.db.getPatientDocument(patientId);
+        sendJson(200, { success: true, patient: updated });
+        return;
+      }
+
+      if (singlePatientMatch && req.method === 'DELETE') {
+        const patientId = singlePatientMatch[1];
         const doc = node.db.getPatientDocument(patientId);
         if (!doc) { sendJson(404, { error: `Patient ${patientId} not found` }); return; }
-        const auditTrail = node.db.getAuditTrail(patientId);
-        sendJson(200, { doc, auditTrail });
+        node.recordTriage(patientId, 'BLACK', 'START_v1.0.0', 'Discharged / Transfer out of sector');
+        node.db.logAuditEvent(node.generateAuditId(), patientId, 'PATIENT_DISCHARGED', node.nodeId, { reason: 'Discharged or transferred' });
+        sendJson(200, { success: true, patientId, status: 'DISCHARGED' });
         return;
       }
 
@@ -222,8 +309,24 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
       if (medMatch && req.method === 'POST') {
         const patientId = medMatch[1];
         const body = await readJsonBody();
-        const result = node.recordMedication(patientId, body.drugName, body.dosage, body.route);
-        sendJson(200, result);
+        if (!body.drugName || typeof body.drugName !== 'string' || body.drugName.trim().length === 0) {
+          sendJson(400, { error: 'Field "drugName" is required and cannot be empty' });
+          return;
+        }
+        if (!body.dosage || typeof body.dosage !== 'string' || body.dosage.trim().length === 0) {
+          sendJson(400, { error: 'Field "dosage" is required and cannot be empty' });
+          return;
+        }
+        try {
+          const result = node.recordMedication(patientId, body.drugName.trim(), body.dosage.trim(), body.route, Boolean(body.forceOverride));
+          sendJson(200, result);
+        } catch (err: any) {
+          if (err.message && err.message.startsWith('ALLERGY_COLLISION:')) {
+            sendJson(409, { error: err.message, allergyCollision: true });
+            return;
+          }
+          throw err;
+        }
         return;
       }
 
@@ -245,26 +348,38 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
         return;
       }
 
-      if (pathname === '/api/v1/vault/sample' && req.method === 'GET') {
+      if (pathname.startsWith('/api/v1/vault/sample') && req.method === 'GET') {
+        const targetPatientId = parsedUrl.searchParams.get('patientId');
+        let citizenName = 'Aarav Sharma';
+        let citizenId = 'CITIZEN-VAL-8821';
+        if (targetPatientId) {
+          const patient = node.db.getPatientDocument(targetPatientId);
+          if (patient) {
+            citizenId = `CITIZEN-${patient.ephemeralId}`;
+            citizenName = `Citizen ${patient.ephemeralId}`;
+          }
+        }
         sendJson(200, {
           profile: {
-            citizenId: 'CITIZEN-DEMO-001',
-            fullName: 'Synthetic Demo Citizen',
+            citizenId,
+            fullName: citizenName,
             isSyntheticDemo: true,
             bloodGroup: 'O+ (DEMO)',
             allergies: ['Penicillin (SYNTHETIC DEMO)', 'Sulfa (SYNTHETIC DEMO)'],
             chronicConditions: ['Asthma (SYNTHETIC DEMO)'],
             currentMedications: [{ name: 'Albuterol (SYNTHETIC DEMO)', dosage: 'Simulated' }],
-            emergencyContacts: [{ name: 'Synthetic Demo Contact', relation: 'Simulated', phone: '+0-000-000-0000' }],
+            emergencyContacts: [{ name: 'Emergency Family Contact', relation: 'Next-of-kin', phone: '+1-555-019-2831' }],
             updatedAt: Date.now()
           },
           snapshot: {
+            citizenId,
+            fullName: citizenName,
             isSyntheticDemo: true,
             bloodGroup: 'O+ (DEMO)',
             allergies: ['Penicillin (SYNTHETIC DEMO)', 'Sulfa (SYNTHETIC DEMO)'],
             criticalConditions: ['Asthma (SYNTHETIC DEMO)'],
             currentMedicationsSummary: ['Albuterol (SYNTHETIC DEMO)'],
-            emergencyContacts: [{ name: 'Synthetic Demo Contact', relation: 'Simulated', phone: '+0-000-000-0000' }],
+            emergencyContacts: [{ name: 'Emergency Family Contact', relation: 'Next-of-kin', phone: '+1-555-019-2831' }],
             extractedAt: Date.now()
           }
         });
@@ -328,25 +443,116 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
       // --- Telemetry & Packet Inspector Endpoints ---
       if (pathname === '/api/v1/telemetry/packets' && req.method === 'GET') {
-        sendJson(200, node.recentWirePackets);
+        sendJson(200, node.recentWirePackets || []);
+        return;
+      }
+
+      const singleWireMatch = pathname.match(/^\/api\/v1\/telemetry\/packets\/([^/]+)$/);
+      if (singleWireMatch && req.method === 'GET') {
+        const pId = singleWireMatch[1];
+        const found = (node.recentWirePackets || []).find(p => p.id === pId || p.bundleId === pId);
+        if (!found) {
+          sendJson(404, { error: `Wire packet ${pId} not found` });
+          return;
+        }
+        sendJson(200, found);
+        return;
+      }
+
+      if (pathname === '/api/v1/telemetry/packets' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.rawWireHex && !body.payload) {
+          sendJson(400, { error: 'Field "rawWireHex" or "payload" is required for telemetry ingestion' });
+          return;
+        }
+        sendJson(200, { success: true, ingested: true, timestamp: Date.now() });
         return;
       }
 
       if (pathname === '/api/v1/telemetry/nostr' && req.method === 'GET') {
-        sendJson(200, node.recentNostrEvents);
+        sendJson(200, { events: node.recentNostrEvents, relayAcks: node.relayPool ? node.relayPool.getAcks() : [] });
         return;
       }
 
       if (pathname === '/api/v1/telemetry/dtn' && req.method === 'GET') {
-        sendJson(200, node.db.listPendingDtnBundles(node.currentOperationId).map(b => ({
+        const bundles = node.db.listPendingDtnBundles(node.currentOperationId).map(b => {
+          let decodedInfo: any = {};
+          try {
+            const wire = decodePacket(b.payload);
+            let parsedPayload: any = null;
+            try {
+              parsedPayload = JSON.parse(wire.payload.toString('utf-8'));
+            } catch {
+              parsedPayload = wire.payload.toString('utf-8');
+            }
+            decodedInfo = {
+              magic: '0x' + MAGIC_BYTES.toString(16).toUpperCase(),
+              crc32Hex: '0x' + wire.header.checksum.toString(16).toUpperCase(),
+              crcValid: true,
+              geohash: wire.header.geohash,
+              sourcePubkey: wire.header.senderPubkeyHash,
+              packetType: wire.header.type,
+              decodedPayload: parsedPayload
+            };
+          } catch (err: any) {
+            decodedInfo = { crcValid: false, decodeError: err.message };
+          }
+
+          return {
+            bundleId: b.bundleId,
+            priority: b.priority === 3 ? 'CRITICAL_SOS' : 'CLINICAL_DELTA',
+            hopCount: b.hopCount,
+            maxHops: b.maxHops,
+            createdAt: b.createdAt,
+            timeStr: new Date(b.createdAt).toLocaleTimeString(),
+            payloadBytes: b.payload.length,
+            deliveryStatus: 'QUEUED_IN_OUTBOX',
+            rawWireHex: b.payload.toString('hex'),
+            ...decodedInfo
+          };
+        });
+        sendJson(200, bundles);
+        return;
+      }
+
+      const singleDtnMatch = pathname.match(/^\/api\/v1\/telemetry\/dtn\/([^/]+)$/);
+      if (singleDtnMatch && req.method === 'GET') {
+        const targetBundleId = singleDtnMatch[1];
+        const allBundles = node.db.listPendingDtnBundles(node.currentOperationId);
+        const b = allBundles.find(item => item.bundleId === targetBundleId);
+        if (!b) {
+          sendJson(404, { error: `Bundle ${targetBundleId} not found in outbox` });
+          return;
+        }
+        let decodedInfo: any = {};
+        try {
+          const wire = decodePacket(b.payload);
+          let parsedPayload: any = null;
+          try { parsedPayload = JSON.parse(wire.payload.toString('utf-8')); } catch { parsedPayload = wire.payload.toString('utf-8'); }
+          decodedInfo = {
+            magic: '0x' + MAGIC_BYTES.toString(16).toUpperCase(),
+            crc32Hex: '0x' + wire.header.checksum.toString(16).toUpperCase(),
+            crcValid: true,
+            geohash: wire.header.geohash,
+            sourcePubkey: wire.header.senderPubkeyHash,
+            packetType: wire.header.type,
+            decodedPayload: parsedPayload
+          };
+        } catch (err: any) {
+          decodedInfo = { crcValid: false, decodeError: err.message };
+        }
+        sendJson(200, {
           bundleId: b.bundleId,
           priority: b.priority === 3 ? 'CRITICAL_SOS' : 'CLINICAL_DELTA',
           hopCount: b.hopCount,
           maxHops: b.maxHops,
           createdAt: b.createdAt,
           timeStr: new Date(b.createdAt).toLocaleTimeString(),
-          payloadBytes: b.payload.length
-        })));
+          payloadBytes: b.payload.length,
+          deliveryStatus: 'QUEUED_IN_OUTBOX',
+          rawWireHex: b.payload.toString('hex'),
+          ...decodedInfo
+        });
         return;
       }
 
@@ -363,6 +569,98 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
       if (pathname === '/api/v1/telemetry/activity' && req.method === 'GET') {
         sendJson(200, node.recentActivityLogs);
+        return;
+      }
+
+      // -------------------------------------------------------------
+      // MESH SYNC & PEER PAIRING ENDPOINTS
+      // -------------------------------------------------------------
+      if ((pathname === '/api/v1/mesh/info' || pathname === '/api/v1/mesh/status') && req.method === 'GET') {
+        const info = node.getLanSyncInfo ? node.getLanSyncInfo() : {
+          nodeId: node.nodeId,
+          port: 4323,
+          ipAddresses: ['127.0.0.1'],
+          pairingPin: 'TACTICAL-000000',
+          peers: [],
+          outboxCount: 0
+        };
+        sendJson(200, info);
+        return;
+      }
+
+      if (pathname === '/api/v1/mesh/peers' && req.method === 'GET') {
+        const peers = (node.lanSync && typeof node.lanSync.getPeersList === 'function')
+          ? node.lanSync.getPeersList()
+          : [];
+        sendJson(200, peers);
+        return;
+      }
+
+      if (pathname === '/api/v1/mesh/probe' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.peerAddress || typeof body.peerAddress !== 'string' || !body.peerAddress.trim()) {
+          sendJson(400, { error: 'Field "peerAddress" is required (e.g. 10.50.10.15:4322)' });
+          return;
+        }
+        try {
+          const probeResult = await node.probePeer(body.peerAddress.trim());
+          sendJson(200, probeResult);
+        } catch (err: any) {
+          sendJson(502, { error: `Peer probe failed: ${err.message}` });
+        }
+        return;
+      }
+
+      if (pathname === '/api/v1/mesh/pair' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.peerAddress || typeof body.peerAddress !== 'string' || !body.peerAddress.trim()) {
+          sendJson(400, { error: 'Field "peerAddress" is required (e.g. 10.50.10.15:4322)' });
+          return;
+        }
+        if (!body.pairingPin || typeof body.pairingPin !== 'string' || !body.pairingPin.trim()) {
+          sendJson(400, { error: 'Field "pairingPin" is required (e.g. TACTICAL-XXXXXX)' });
+          return;
+        }
+        try {
+          const session = await node.pairWithPeer(body.peerAddress.trim(), body.pairingPin.trim());
+          sendJson(200, {
+            success: true,
+            status: 'PAIRED',
+            sessionId: session.sessionId,
+            serverNodeId: session.serverNodeId,
+            peerAddress: session.peerAddress,
+            pairedAt: session.pairedAt
+          });
+        } catch (err: any) {
+          const isAuth = err.message && (err.message.includes('401') || err.message.toLowerCase().includes('pin'));
+          sendJson(isAuth ? 401 : 502, { error: `Pairing failed: ${err.message}` });
+        }
+        return;
+      }
+
+      if (pathname === '/api/v1/mesh/sync' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.peerAddress || typeof body.peerAddress !== 'string' || !body.peerAddress.trim()) {
+          sendJson(400, { error: 'Field "peerAddress" is required (e.g. 10.50.10.15:4322)' });
+          return;
+        }
+        try {
+          const syncResult = await node.syncWithPeer(body.peerAddress.trim(), body.pairingPin?.trim());
+          sendJson(200, syncResult);
+        } catch (err: any) {
+          sendJson(500, { error: `Synchronization failed: ${err.message}` });
+        }
+        return;
+      }
+
+      if (pathname === '/api/v1/mesh/pin' && req.method === 'POST') {
+        const body = await readJsonBody();
+        if (!body.pairingPin || typeof body.pairingPin !== 'string' || !body.pairingPin.trim()) {
+          sendJson(400, { error: 'Field "pairingPin" is required' });
+          return;
+        }
+        const updatedPin = node.setPairingPin ? node.setPairingPin(body.pairingPin.trim()) : body.pairingPin.trim();
+        sendJson(200, { success: true, pairingPin: updatedPin });
         return;
       }
 
@@ -413,8 +711,20 @@ export function createPeerScribeServer(daemon?: PeerScribeDaemon): http.Server {
 
       sendJson(404, { error: 'Not Found' });
     } catch (err: any) {
+      if (err.message === 'Invalid JSON') {
+        sendJson(400, { error: 'Malformed JSON payload' });
+        return;
+      }
+      if (err.message === 'Payload too large') {
+        sendJson(413, { error: 'Payload exceeds 2MB limit' });
+        return;
+      }
       if (err.message && err.message.startsWith('Unauthorized:')) {
         sendJson(403, { error: err.message, authorizationFailed: true });
+        return;
+      }
+      if (err.message && err.message.includes('not found')) {
+        sendJson(404, { error: err.message });
         return;
       }
       sendJson(500, { error: err.message || 'Internal Server Error' });

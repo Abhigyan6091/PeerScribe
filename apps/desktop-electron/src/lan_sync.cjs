@@ -466,6 +466,79 @@ class LanSyncService {
     });
   }
 
+  get pairedPeers() {
+    const set = new Set();
+    for (const [key, session] of this.clientSessions.entries()) {
+      if (session && session.peerAddress) set.add(session.peerAddress);
+    }
+    return set;
+  }
+
+  getPeersList() {
+    const peers = [];
+    const seen = new Set();
+    for (const [key, session] of this.clientSessions.entries()) {
+      if (session && session.peerAddress && !seen.has(session.peerAddress)) {
+        seen.add(session.peerAddress);
+        peers.push({
+          peerAddress: session.peerAddress,
+          nodeId: session.serverNodeId || session.peerId || 'unknown',
+          pairedAt: session.pairedAt,
+          lastSyncAt: session.lastSyncAt || null,
+          status: 'CONNECTED'
+        });
+      }
+    }
+    return peers;
+  }
+
+  /**
+   * Probes a peer address to query discovery info without authenticating.
+   */
+  async probePeer(peerAddress) {
+    let cleanAddress = peerAddress.trim();
+    if (!cleanAddress.startsWith('http://') && !cleanAddress.startsWith('https://')) {
+      cleanAddress = `http://${cleanAddress}`;
+    }
+
+    const infoUrl = new URL('/api/v1/sync/info', cleanAddress);
+
+    return new Promise((resolve, reject) => {
+      const req = http.request(infoUrl, {
+        method: 'GET',
+        timeout: 4000
+      }, (res) => {
+        let respBody = '';
+        res.on('data', chunk => { respBody += chunk; });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`Peer info request failed with status ${res.statusCode}: ${respBody}`));
+            return;
+          }
+          try {
+            const data = JSON.parse(respBody);
+            const isPaired = this.clientSessions.has(cleanAddress) || (data.nodeId && this.clientSessions.has(data.nodeId));
+            resolve({
+              ...data,
+              peerAddress: cleanAddress,
+              paired: Boolean(isPaired),
+              status: isPaired ? 'CONNECTED' : 'PAIRING_REQUIRED'
+            });
+          } catch (err) {
+            reject(new Error(`Failed to parse peer discovery JSON: ${err.message}`));
+          }
+        });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error(`Probe request to ${cleanAddress} timed out`));
+      });
+      req.on('error', err => reject(new Error(`Could not connect to peer ${cleanAddress}: ${err.message}`)));
+      req.end();
+    });
+  }
+
   /**
    * Pairs with a remote peer using an explicit, verifiable pairing PIN.
    */
@@ -668,6 +741,7 @@ class LanSyncService {
               }
             }
 
+            session.lastSyncAt = Date.now();
             resolve({
               success: true,
               peer: cleanAddress,

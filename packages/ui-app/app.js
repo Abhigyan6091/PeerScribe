@@ -1,8 +1,125 @@
+
+// =========================================================================
+// Universal Modal Confirmation Dialog System (Replaces browser confirm)
+// =========================================================================
+let pendingConfirmationAction = null;
+
+window.showConfirmationDialog = function({ title, message, details = '', confirmText = 'Proceed', confirmStyle = 'primary', onConfirm }) {
+  const modal = document.getElementById('confirmationModal');
+  const titleEl = document.getElementById('confirmModalTitle');
+  const msgEl = document.getElementById('confirmModalMessage');
+  const detailsEl = document.getElementById('confirmModalDetails');
+  const actionBtn = document.getElementById('confirmActionBtn');
+  const box = document.getElementById('confirmModalBox');
+
+  if (!modal) return;
+
+  if (titleEl) titleEl.innerHTML = title;
+  if (msgEl) msgEl.innerHTML = message;
+  if (detailsEl) {
+    detailsEl.innerHTML = details;
+    detailsEl.style.display = details ? 'block' : 'none';
+  }
+  if (actionBtn) {
+    actionBtn.innerText = confirmText;
+    actionBtn.disabled = false;
+    if (confirmStyle === 'danger') {
+      actionBtn.style.background = 'var(--triage-red)';
+      actionBtn.style.color = '#FFF';
+      if (box) box.style.borderLeftColor = 'var(--triage-red)';
+    } else if (confirmStyle === 'warning') {
+      actionBtn.style.background = 'var(--triage-yellow)';
+      actionBtn.style.color = '#000';
+      if (box) box.style.borderLeftColor = 'var(--triage-yellow)';
+    } else {
+      actionBtn.style.background = 'var(--accent-primary)';
+      actionBtn.style.color = '#000';
+      if (box) box.style.borderLeftColor = 'var(--accent-primary)';
+    }
+  }
+
+  pendingConfirmationAction = onConfirm;
+  modal.style.display = 'flex';
+};
+
+window.closeConfirmationDialog = function(confirmed = false) {
+  const modal = document.getElementById('confirmationModal');
+  if (modal) modal.style.display = 'none';
+  if (!confirmed) {
+    pendingConfirmationAction = null;
+  }
+};
+
+window.executeConfirmedAction = async function() {
+  const actionBtn = document.getElementById('confirmActionBtn');
+  if (pendingConfirmationAction) {
+    const fn = pendingConfirmationAction;
+    pendingConfirmationAction = null;
+    if (actionBtn) {
+      actionBtn.disabled = true;
+      actionBtn.innerText = 'Processing...';
+    }
+    try {
+      await fn();
+    } catch (err) {
+      showToast(`Action failed: ${err.message}`, 'error');
+    } finally {
+      window.closeConfirmationDialog(true);
+    }
+  } else {
+    window.closeConfirmationDialog(true);
+  }
+};
+
 /**
  * PeerScribe Tactical UI Controller
  * Integrates directly with the PeerScribe backend service daemon via REST & SSE
  * with resilient offline fallback when running standalone.
  */
+
+// Tactical Non-Blocking Toast Notification System
+function showToast(message, type = 'info', durationMs = 4000) {
+  const container = document.getElementById('toastContainer');
+  if (!container) {
+    console.log(`[TOAST - ${type.toUpperCase()}] ${message}`);
+    return;
+  }
+  const icons = {
+    info: 'ℹ️',
+    success: '✅',
+    warning: '⚠️',
+    error: '🚨'
+  };
+  const toast = document.createElement('div');
+  toast.className = `toast-item toast-${type}`;
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || 'ℹ️'}</span>
+    <span class="toast-msg">${String(message).replace(/\n/g, '<br/>')}</span>
+    <button class="toast-close" title="Dismiss" aria-label="Dismiss">&times;</button>
+  `;
+  const closeBtn = toast.querySelector('.toast-close');
+  if (closeBtn) {
+    closeBtn.onclick = () => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(20px)';
+      setTimeout(() => toast.remove(), 200);
+    };
+  }
+  container.appendChild(toast);
+  setTimeout(() => {
+    if (toast.parentElement) {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(20px)';
+      toast.style.transition = 'all 0.25s ease';
+      setTimeout(() => toast.remove(), 250);
+    }
+  }, durationMs);
+}
+window.showToast = showToast;
+// Provide elegant non-blocking fallback for any default alert calls
+window.alert = function(msg) {
+  showToast(msg, 'info', 4500);
+};
 
 const API_BASE = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:4321';
 const PHONETIC_ANIMALS = ['PANTHER', 'FALCON', 'WOLF', 'OTTER', 'BADGER', 'HAWK', 'BEAR', 'VIPER'];
@@ -44,6 +161,9 @@ async function initBackendConnection() {
 
       await loadBackendPatients();
       setupSseStream();
+      if (typeof window.loadMeshStatus === 'function') {
+        window.loadMeshStatus().catch(() => {});
+      }
     }
   } catch (err) {
     console.warn('[PeerScribe UI] Running in standalone offline simulation mode.');
@@ -86,6 +206,40 @@ async function loadBackendPatients() {
         };
       });
       renderCasualties();
+
+      if (remotePatients.length > 0) {
+        if (activePatient.id === 'pt_001' || !remotePatients.some(p => p.doc.patientId === activePatient.patientId)) {
+          const first = remotePatients[0];
+          activePatient = {
+            id: first.doc.ephemeralId,
+            patientId: first.doc.patientId,
+            ephemeralId: first.doc.ephemeralId,
+            triage: first.activeTriage,
+            vitals: `Observed ${first.doc.vitals?.length || 0} vitals`,
+            time: 'just now',
+            knownAllergies: first.doc.knownAllergies || []
+          };
+          updateActivePatientUi();
+        }
+      }
+
+      // Restore persisted semantic divergence banner on initial load / refresh
+      const divergentPatient = remotePatients.find(p => p.doc && p.doc.divergenceFlags && p.doc.divergenceFlags.some(f => !f.resolved));
+      if (divergentPatient) {
+        const activeFlags = divergentPatient.doc.divergenceFlags.filter(f => !f.resolved);
+        const banner = document.getElementById('divergenceBanner');
+        const desc = document.getElementById('divergenceDesc');
+        if (banner) banner.style.display = 'block';
+        if (desc) {
+          desc.innerText = `${divergentPatient.doc.ephemeralId}: ${activeFlags[0].conflictType || 'Clinical Divergence Detected'}`;
+        }
+        window._liveDivergenceData = {
+          patientId: divergentPatient.doc.patientId,
+          ephemeralId: divergentPatient.doc.ephemeralId,
+          flags: activeFlags,
+          activeTriage: divergentPatient.activeTriage
+        };
+      }
     }
 
     // Update live triage summary bar from backend status
@@ -166,7 +320,7 @@ function setupSseStream() {
 
 async function assignTriage(category, autoAdvance = true) {
   if (currentResponderRole === 'PARTICIPANT') {
-    alert('⛔ ACCESS DENIED: Role PARTICIPANT lacks TRIAGE_OVERRIDE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.');
+    showToast('ACCESS DENIED: Role PARTICIPANT lacks TRIAGE_OVERRIDE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.', 'error');
     return;
   }
   activePatient.triage = category;
@@ -210,10 +364,8 @@ async function assignTriage(category, autoAdvance = true) {
   renderCasualties();
   updateActivePatientDisplay();
 
-  // If manual intake mode, advance to next casualty
-  if (autoAdvance) {
-    createNewIntakePatient(category);
-  }
+  // Preserve current casualty state without creating ghost casualties
+  showToast(`Assigned triage ${category} to ${activePatient.ephemeralId}`, 'success', 2500);
 }
 
 function updateActivePatientDisplay() {
@@ -292,6 +444,8 @@ async function createNewIntakePatient(prefix = 'PENDING') {
 }
 
 function renderCasualties() {
+  const countBadge = document.getElementById('casualtyFeedCountBadge');
+  if (countBadge) countBadge.innerText = `${casualties.length} Total`;
   const listEl = document.getElementById('casualtyList');
   if (!listEl) return;
 
@@ -406,7 +560,7 @@ function setupSpeechEngine() {
       console.warn('[PeerScribe Speech] Recognition notice:', event.error);
       const statusPill = document.getElementById('voiceStatusPill');
       if (event.error === 'not-allowed') {
-        alert('Microphone access was denied. You can still type observations or click presets.');
+        showToast('Microphone access was denied. You can still type observations or click presets.', 'warning');
         if (statusPill) statusPill.innerText = 'MIC PERMISSION DENIED';
         stopVoiceRecording(false);
       } else if (event.error === 'network') {
@@ -984,7 +1138,7 @@ function closeDivergenceModal() {
 
 async function resolveConflict(confirmedCategory, patientId) {
   if (currentResponderRole === 'PARTICIPANT') {
-    alert('⛔ ACCESS DENIED: Role PARTICIPANT lacks RESOLVE_DIVERGENCE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.');
+    showToast('ACCESS DENIED: Role PARTICIPANT lacks RESOLVE_DIVERGENCE capability. Authorized roles: MEDICAL_RESPONDER, COORDINATOR.', 'error');
     return;
   }
   const banner = document.getElementById('divergenceBanner');
@@ -1011,22 +1165,34 @@ async function resolveConflict(confirmedCategory, patientId) {
 
   window._liveDivergenceData = null;
   assignTriage(confirmedCategory, false);
-  alert(`✅ Clinical divergence resolved: Patient confirmed as ${confirmedCategory} by authorized clinician.`);
+  showToast(`Clinical divergence resolved: Patient confirmed as ${confirmedCategory} by authorized clinician.`, 'success');
 }
 
 async function triggerEmergencyWipe() {
-  const confirmWipe = confirm('⚠️ EMERGENCY WIPE: This will immediately zeroize encryption keys, wipe all local CRDT replicas, and clear patient data. Proceed?');
-  if (confirmWipe) {
-    if (isBackendConnected) {
-      try {
-        await fetch(`${API_BASE}/api/v1/security/wipe`, { method: 'POST' });
-      } catch (err) {
-        console.warn('[Wipe] Backend wipe call failed:', err);
+  window.showConfirmationDialog({
+    title: '🚨 ZERO-STATE EMERGENCY WIPE',
+    message: 'CRITICAL DESTRUCTIVE ACTION: You are about to initiate an emergency zero-state cryptographic wipe.',
+    details: '• All in-memory session private keys and Nostr ephemeral keys will be purged.<br>• All local patient CRDT documents in SQLite WAL will be cleared.<br>• All pending DTN store-and-forward outbox bundles will be zeroized.<br>• Node will uninitialize and return to zero-state.<br><br><strong>This operation cannot be reversed. Personal profile vaults remain protected.</strong>',
+    confirmText: 'Confirm & Zeroize State',
+    confirmStyle: 'danger',
+    onConfirm: async () => {
+      if (isBackendConnected) {
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/security/wipe`, { method: 'POST' });
+          if (!res.ok) {
+            const err = await res.json();
+            showToast(`Emergency wipe failed: ${err.error || 'Server error'}`, 'error');
+            return;
+          }
+        } catch (err) {
+          showToast(`Emergency wipe failed: ${err.message}`, 'error');
+          return;
+        }
       }
+      resetFrontendState();
+      showToast('ZEROIZATION COMPLETE: All memory keys scrubbed, SQLite WAL sanitized, node uninitialized.', 'warning', 6000);
     }
-    resetFrontendState();
-    alert('✅ ZEROIZATION COMPLETE: All memory keys scrubbed, SQLite WAL sanitized, node uninitialized.');
-  }
+  });
 }
 
 function resetFrontendState() {
@@ -1135,11 +1301,12 @@ async function refreshTelemetry() {
       fetch(`${API_BASE}/api/v1/telemetry/activity`).then(r => r.json()).catch(() => [])
     ]);
 
-    wirePacketsCache = wireRes;
-    auditTrailCache = auditRes;
-    dtnBundlesCache = dtnRes;
-    nostrEventsCache = nostrRes;
-    consoleLogsCache = actRes;
+    wirePacketsCache = Array.isArray(wireRes) ? wireRes : [];
+    auditTrailCache = Array.isArray(auditRes) ? auditRes : [];
+    dtnBundlesCache = Array.isArray(dtnRes) ? dtnRes : [];
+    nostrEventsCache = Array.isArray(nostrRes) ? nostrRes : (nostrRes.events || []);
+    const nostrAcks = (nostrRes && nostrRes.relayAcks) || [];
+    consoleLogsCache = Array.isArray(actRes) ? actRes : [];
 
     const wireCountEl = document.getElementById('wireCount');
     if (wireCountEl) wireCountEl.innerText = wirePacketsCache.length;
@@ -1166,7 +1333,7 @@ function renderTelemetryView() {
       return;
     }
     container.innerHTML = wirePacketsCache.map(p => `
-      <div class="tele-card" style="border-left-color: ${p.priority === 'CRITICAL_SOS' ? '#FF1A1A' : '#00F5D4'};">
+      <div class="tele-card" style="border-left-color: ${p.priority === 'CRITICAL_SOS' ? '#FF1A1A' : '#00F5D4'}; cursor: pointer; transition: transform 0.12s;" onclick="openPacketDetail('${p.bundleId}')" title="Click to inspect 32-byte BitChat wire framing and payload">
         <div class="tele-field">
           <strong style="color: #00F5D4;">[${p.packetType}] ${p.bundleId}</strong>
           <span style="color: #94A3B8;">${p.timeStr}</span>
@@ -1201,13 +1368,17 @@ function renderTelemetryView() {
       return;
     }
     container.innerHTML = dtnBundlesCache.map(b => `
-      <div class="tele-card" style="border-left-color: #F59E0B;">
+      <div class="tele-card" style="border-left-color: #F59E0B; cursor: pointer; transition: transform 0.12s;" onclick="openPacketDetail('${b.bundleId}')" title="Click to inspect packet headers, CRC32, and wire payload">
         <div class="tele-field">
           <strong style="color: #F59E0B;">Bundle: ${b.bundleId}</strong>
           <span>${b.timeStr}</span>
         </div>
         <div class="tele-field"><span>Priority:</span> <strong style="color: #EF4444;">${b.priority}</strong></div>
         <div class="tele-field"><span>Hop Count:</span> ${b.hopCount} / ${b.maxHops} | Wire Payload: ${b.payloadBytes} bytes</div>
+        <div style="font-size: 0.72rem; color: #38BDF8; margin-top: 4px; display: flex; justify-content: space-between; align-items: center;">
+          <span>CRC-32: <code>${b.crc32Hex || 'Verified'}</code></span>
+          <span style="color: #00F5D4; font-weight: 700;">🔍 Inspect Wire Packet &rarr;</span>
+        </div>
       </div>
     `).join('');
   } else if (currentTeleTab === 'ai') {
@@ -1422,14 +1593,32 @@ function renderRadarCanvas(contours, animatePing = false) {
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Simulated Monte Carlo particles
-  ctx.fillStyle = 'rgba(0, 245, 212, 0.6)';
-  for (let i = 0; i < 50; i++) {
-    const angle = (i * 137.5) * (Math.PI / 180);
-    const dist = (Math.sqrt(i) / Math.sqrt(50)) * r90 * 0.95;
-    const px = cx + Math.cos(angle) * dist;
-    const py = cy + Math.sin(angle) * dist;
-    ctx.fillRect(px - 1, py - 1, 2, 2);
+  // Real Sequential Monte Carlo particles
+  ctx.fillStyle = 'rgba(0, 245, 212, 0.75)';
+  if (contours && contours.sampleParticles && contours.sampleParticles.length > 0) {
+    const particles = contours.sampleParticles;
+    const centerLat = contours.centerLat;
+    const centerLon = contours.centerLon;
+    const latMeters = 111320;
+    const lonMeters = 111320 * Math.cos(centerLat * Math.PI / 180);
+    const maxR = Math.max(1, (contours.radius90PercentMeters || 100));
+    const scale = r90 / maxR;
+
+    for (const p of particles) {
+      const dxMeters = (p.lon - centerLon) * lonMeters;
+      const dyMeters = (p.lat - centerLat) * latMeters;
+      const px = cx + dxMeters * scale;
+      const py = cy - dyMeters * scale;
+      ctx.fillRect(px - 1.25, py - 1.25, 2.5, 2.5);
+    }
+  } else {
+    for (let i = 0; i < 40; i++) {
+      const angle = (i * 137.5) * (Math.PI / 180);
+      const dist = (Math.sqrt(i) / Math.sqrt(40)) * r90 * 0.9;
+      const px = cx + Math.cos(angle) * dist;
+      const py = cy + Math.sin(angle) * dist;
+      ctx.fillRect(px - 1, py - 1, 2, 2);
+    }
   }
 
   // Center LKP Marker
@@ -1671,14 +1860,16 @@ function renderDossierContent() {
           <div>Documented Allergies: ${allergiesHtml}</div>
         </div>
         <button class="dossier-action-btn" style="width:100%; background:rgba(139,92,246,0.2); border-color:#8B5CF6; color:#C4B5FD; padding:8px;" onclick="linkEmergencySnapshot('${targetId}')">
-          🔐 Link Emergency Medical ID Snapshot (Aarav Sharma — Penicillin Allergy)
+          🔐 Link Emergency Medical ID Snapshot for ${activePatient.ephemeralId || targetId}
         </button>
       </div>
     `;
   }
 }
 
+let isSubmittingVitals = false;
 async function submitDossierVitals() {
+  if (isSubmittingVitals) return;
   const targetId = activePatient.patientId || activePatient.id;
   const rr = parseInt(document.getElementById('quickRr')?.value, 10);
   const pulse = document.getElementById('quickPulse')?.value === 'true';
@@ -1686,7 +1877,8 @@ async function submitDossierVitals() {
 
   if (isBackendConnected && targetId) {
     try {
-      await fetch(`${API_BASE}/api/v1/patients/${targetId}/vitals`, {
+      isSubmittingVitals = true;
+      const res = await fetch(`${API_BASE}/api/v1/patients/${targetId}/vitals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1695,10 +1887,16 @@ async function submitDossierVitals() {
           mentalStatus: mental
         })
       });
+      if (res.ok) {
+        showToast(`Vitals saved for ${activePatient.ephemeralId || targetId}`, 'success', 2500);
+      }
       await openCasualtyDossier(targetId);
       await loadBackendPatients();
     } catch (err) {
       console.warn('[Dossier] Failed to record vitals:', err);
+      showToast(`Failed to save vitals: ${err.message}`, 'error');
+    } finally {
+      isSubmittingVitals = false;
     }
   }
 }
@@ -1720,26 +1918,80 @@ async function submitDossierInjury(location, classification, tourniquetApplied =
   }
 }
 
-async function submitDossierMedication(drugName, dosage, route) {
+async function submitDossierMedication(drugName, dosage, route, forceOverride = false) {
   const targetId = activePatient.patientId || activePatient.id;
+  if (!targetId) return;
+
+  // Immediate pre-check against documented allergies
+  const allergies = activePatient.knownAllergies || [];
+  const normDrug = (drugName || '').toLowerCase();
+  let collidesWith = null;
+  const ALLERGY_MAP = {
+    penicillin: ['penicillin', 'amoxicillin', 'ampicillin', 'augmentin', 'piperacillin', 'zosyn'],
+    sulfa: ['sulfa', 'sulfamethoxazole', 'bactrim', 'septra'],
+    morphine: ['morphine', 'ms contin', 'oramorph'],
+    fentanyl: ['fentanyl', 'sublimaze', 'duragesic'],
+    nsaid: ['nsaid', 'ibuprofen', 'motrin', 'advil', 'naproxen', 'aleve', 'ketorolac', 'toradol', 'aspirin']
+  };
+
+  for (const allergy of allergies) {
+    const normAllergy = (allergy || '').toLowerCase();
+    if (normDrug.includes(normAllergy) || normAllergy.includes(normDrug)) {
+      collidesWith = allergy;
+      break;
+    }
+    for (const [, syns] of Object.entries(ALLERGY_MAP)) {
+      if (syns.some(s => normAllergy.includes(s)) && syns.some(s => normDrug.includes(s))) {
+        collidesWith = allergy;
+        break;
+      }
+    }
+    if (collidesWith) break;
+  }
+
+  if (collidesWith && !forceOverride) {
+    window.showConfirmationDialog({
+      title: '🚨 CRITICAL ALLERGY CONFLICT (FATAL RISK)',
+      message: `Documented Allergy Collision: Administering "${drugName}" (${dosage}) poses a FATAL RISK.`,
+      details: `Patient has a documented allergy to: <strong>${collidesWith}</strong>.<br>Administering <strong>${drugName} (${dosage} ${route})</strong> poses an immediate anaphylactic or fatal safety risk.<br><br>Are you certain you want to force override and administer this medication?`,
+      confirmText: 'Force Override & Administer',
+      confirmStyle: 'danger',
+      onConfirm: async () => {
+        await submitDossierMedication(drugName, dosage, route, true);
+      }
+    });
+    return;
+  }
+
   if (isBackendConnected && targetId) {
     try {
       const res = await fetch(`${API_BASE}/api/v1/patients/${targetId}/medications`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ drugName, dosage, route })
+        body: JSON.stringify({ drugName, dosage, route, forceOverride })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.divergences && data.divergences.length > 0) {
-          const flag = data.divergences[0];
-          alert(`🚨 FATAL RISK ALERT: Administered ${drugName} collides with documented allergy! (${flag.conflictType})`);
-        }
+      if (res.status === 409) {
+        const err = await res.json();
+        showToast(`FATAL RISK ALERT: Administration blocked: ${err.error}`, 'error', 7000);
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(`Failed to record medication: ${err.error || 'Server error'}`, 'error');
+        return;
+      }
+      const data = await res.json();
+      if (data.divergences && data.divergences.length > 0) {
+        const flag = data.divergences[0];
+        showToast(`FATAL RISK ALERT: Administered ${drugName} collides with documented allergy! (${flag.conflictType})`, 'error', 7000);
+      } else {
+        showToast(`Administered ${drugName} (${dosage} ${route})`, 'success');
       }
       await openCasualtyDossier(targetId);
       await loadBackendPatients();
     } catch (err) {
       console.warn('[Dossier] Failed to record medication:', err);
+      showToast(`Error administering medication: ${err.message}`, 'error');
     }
   }
 }
@@ -1781,9 +2033,9 @@ async function linkEmergencySnapshot(patientId) {
       });
       if (attachRes.ok) {
         const result = await attachRes.json();
-        alert(`🔐 Emergency Medical ID linked!\nBlood Group: ${snapshot.bloodGroup}\nDocumented Allergies: ${snapshot.allergies.join(', ')}`);
+        showToast(`Emergency Medical ID linked!\nBlood Group: ${snapshot.bloodGroup}\nDocumented Allergies: ${snapshot.allergies.join(', ')}`, 'success', 5000);
         if (result.divergences && result.divergences.length > 0) {
-          alert(`🚨 SEMANTIC DIVERGENCE: Allergy collision detected with prior administered drugs!`);
+          showToast(`SEMANTIC DIVERGENCE: Allergy collision detected with prior administered drugs!`, 'error', 6000);
         }
         await openCasualtyDossier(targetId);
         await loadBackendPatients();
@@ -1814,18 +2066,21 @@ window.checkDeltaUpdates = async function() {
   if (window.peerScribeDesktop && typeof window.peerScribeDesktop.invoke === 'function') {
     try {
       const res = await window.peerScribeDesktop.invoke('system:check-updates');
-      alert(`⚡ PeerScribe v${res.currentVersion} Delta Updater\n\nStatus: ${res.message}\nDifferential Blockmaps: ACTIVE\nChecked: ${new Date(res.lastCheckedAt).toLocaleTimeString()}`);
+      showToast(`PeerScribe v${res.currentVersion} Delta Updater\nStatus: ${res.message}\nDifferential Blockmaps: ACTIVE\nChecked: ${new Date(res.lastCheckedAt).toLocaleTimeString()}`, 'info', 5000);
     } catch (err) {
-      alert('⚡ PeerScribe v1.0 Delta Updater: System is up to date with tactical mesh.');
+      showToast('PeerScribe v1.0 Delta Updater: System is up to date with tactical mesh.', 'info');
     }
   } else {
-    alert('⚡ PeerScribe v1.0 (Web/Mesh Node)\n\nDifferential delta updates active. Current build is up-to-date.');
+    showToast('PeerScribe v1.0 (Web/Mesh Node)\nDifferential delta updates active. Current build is up-to-date.', 'info');
   }
 };
 
 
 initBackendConnection().then(() => {
   refreshTelemetry();
+  if (typeof window.loadMeshStatus === 'function') {
+    window.loadMeshStatus().catch(() => {});
+  }
 });
 
 // =========================================================================
@@ -1858,17 +2113,32 @@ function updateRbacUiState() {
     roleSelect.value = currentResponderRole;
   }
 
-  // Visual cues for restricted roles
+  const isTriagePermitted = currentResponderRole === 'MEDICAL_RESPONDER' || currentResponderRole === 'COORDINATOR';
   const triageButtons = document.querySelectorAll('.triage-btn');
   triageButtons.forEach(btn => {
-    if (currentResponderRole === 'PARTICIPANT') {
-      btn.style.opacity = '0.5';
-      btn.title = 'Triage locked for PARTICIPANT role (Read-Only)';
+    if (!isTriagePermitted) {
+      btn.style.opacity = '0.45';
+      btn.title = `Triage locked for ${currentResponderRole} role (Requires MEDICAL_RESPONDER or COORDINATOR)`;
     } else {
       btn.style.opacity = '1.0';
       btn.title = '';
     }
   });
+
+  const initOpBtn = document.querySelector('#operationsModal button[onclick="createNewOperation()"]');
+  if (initOpBtn) {
+    if (currentResponderRole !== 'COORDINATOR') {
+      initOpBtn.disabled = true;
+      initOpBtn.style.opacity = '0.5';
+      initOpBtn.style.cursor = 'not-allowed';
+      initOpBtn.title = 'Initiating operations requires COORDINATOR role';
+    } else {
+      initOpBtn.disabled = false;
+      initOpBtn.style.opacity = '1.0';
+      initOpBtn.style.cursor = 'pointer';
+      initOpBtn.title = '';
+    }
+  }
 }
 
 window.openOperationsModal = async function() {
@@ -1942,8 +2212,12 @@ window.createNewOperation = async function() {
   const opId = idInput?.value.trim();
   const title = titleInput?.value.trim();
 
+  if (currentResponderRole !== 'COORDINATOR') {
+    showToast(`Permission Denied: Initiating operations requires COORDINATOR role. Current role: ${currentResponderRole}`, 'error');
+    return;
+  }
   if (!opId) {
-    alert('Please enter an Operation ID (e.g. OP-EARTHQUAKE-2026)');
+    showToast('Please enter an Operation ID (e.g. OP-EARTHQUAKE-2026)', 'warning');
     return;
   }
 
@@ -1952,15 +2226,15 @@ window.createNewOperation = async function() {
       const res = await fetch(`${API_BASE}/api/v1/operations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: opId, title: title || opId })
+        body: JSON.stringify({ operationId: opId, name: title || opId, title: title || opId })
       });
       if (!res.ok) {
         const err = await res.json();
-        alert(`Failed to create operation: ${err.error || 'Server error'}`);
+        showToast(`Failed to create operation: ${err.error || 'Server error'}`, 'error');
         return;
       }
     } catch (e) {
-      alert(`Network error: ${e.message}`);
+      showToast(`Network error: ${e.message}`, 'error');
       return;
     }
   }
@@ -1982,7 +2256,7 @@ window.switchActiveOperation = async function(opId) {
         await loadOperationsList();
       }
     } catch (e) {
-      alert(`Failed to switch operation: ${e.message}`);
+      showToast(`Failed to switch operation: ${e.message}`, 'error');
     }
   } else {
     currentActiveOperationId = opId;
@@ -1992,7 +2266,7 @@ window.switchActiveOperation = async function(opId) {
 
 window.finalizeActiveOperation = async function(opId) {
   if (currentResponderRole !== 'COORDINATOR') {
-    alert('⛔ ACCESS DENIED: Only COORDINATOR role may finalize operations.');
+    showToast('ACCESS DENIED: Only COORDINATOR role may finalize operations.', 'error');
     return;
   }
   if (isBackendConnected) {
@@ -2002,14 +2276,14 @@ window.finalizeActiveOperation = async function(opId) {
         await loadOperationsList();
       }
     } catch (e) {
-      alert(`Failed to finalize operation: ${e.message}`);
+      showToast(`Failed to finalize operation: ${e.message}`, 'error');
     }
   }
 };
 
 window.archiveActiveOperation = async function(opId) {
   if (currentResponderRole !== 'COORDINATOR') {
-    alert('⛔ ACCESS DENIED: Only COORDINATOR role may archive operations.');
+    showToast('ACCESS DENIED: Only COORDINATOR role may archive operations.', 'error');
     return;
   }
   const confirmed = confirm(`⚠️ ARCHIVE OPERATION: Are you sure you want to finalize and archive all incident data for ${opId}? Personal profile vaults will remain strictly preserved.`);
@@ -2020,11 +2294,519 @@ window.archiveActiveOperation = async function(opId) {
       const res = await fetch(`${API_BASE}/api/v1/operations/${opId}/archive`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        alert(`✅ OPERATION ARCHIVED: Incident snapshot sealed with SHA-256 digest ${data.archiveInfo?.archiveDigest?.slice(0, 16)}... Personal medical vaults strictly preserved.`);
+        showToast(`OPERATION ARCHIVED: Incident snapshot sealed with SHA-256 digest ${data.archiveInfo?.archiveDigest?.slice(0, 16)}... Personal medical vaults strictly preserved.`, 'success', 6000);
         await loadOperationsList();
       }
     } catch (e) {
-      alert(`Failed to archive operation: ${e.message}`);
+      showToast(`Failed to archive operation: ${e.message}`, 'error');
     }
   }
 };
+
+window.openPacketDetail = async function(bundleId) {
+  let packet = dtnBundlesCache.find(b => b.bundleId === bundleId);
+  if ((!packet || !packet.rawWireHex) && isBackendConnected) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/telemetry/dtn/${bundleId}`);
+      if (res.ok) packet = await res.json();
+    } catch (e) {}
+  }
+  if (!packet) {
+    showToast(`Bundle ${bundleId} not found in outbox`, 'warning');
+    return;
+  }
+
+  const modal = document.getElementById('packetDetailModal');
+  const container = document.getElementById('packetDetailContent');
+  if (!modal || !container) return;
+
+  const priorityColor = packet.priority === 'CRITICAL_SOS' ? '#EF4444' : '#F59E0B';
+  const decodedFormatted = packet.decodedPayload ? JSON.stringify(packet.decodedPayload, null, 2) : 'Payload encrypted or raw stream';
+
+  container.innerHTML = `
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; font-size: 0.82rem;">
+      <div style="background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;">
+        <div style="color: var(--text-muted); font-size: 0.72rem;">BUNDLE ID</div>
+        <div style="font-family: var(--font-mono); font-weight: 700; color: #FFF;">${packet.bundleId}</div>
+      </div>
+      <div style="background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;">
+        <div style="color: var(--text-muted); font-size: 0.72rem;">PRIORITY &amp; STATUS</div>
+        <div>
+          <span style="color: ${priorityColor}; font-weight: 800;">${packet.priority}</span> |
+          <span style="color: #00F5D4; font-weight: 700;">${packet.deliveryStatus || 'QUEUED_IN_OUTBOX'}</span>
+        </div>
+      </div>
+      <div style="background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;">
+        <div style="color: var(--text-muted); font-size: 0.72rem;">WIRE FRAMING &amp; CRC-32</div>
+        <div style="font-family: var(--font-mono); color: #FFF;">
+          Magic: <strong>${packet.magic || '0x5053'}</strong> | CRC-32: <span style="color: #00F5D4; font-weight: 700;">${packet.crc32Hex || '0xVALID'}</span>
+        </div>
+      </div>
+      <div style="background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;">
+        <div style="color: var(--text-muted); font-size: 0.72rem;">HOPS &amp; TIMESTAMP</div>
+        <div style="color: #FFF;">
+          Hop: <strong>${packet.hopCount} / ${packet.maxHops}</strong> | ${packet.timeStr || new Date(packet.createdAt).toLocaleTimeString()}
+        </div>
+      </div>
+      <div style="background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; grid-column: span 2;">
+        <div style="color: var(--text-muted); font-size: 0.72rem;">SECTOR GEOHASH &amp; SOURCE PUBKEY</div>
+        <div style="font-family: var(--font-mono); color: #38BDF8; font-size: 0.78rem;">
+          Geohash: <strong>${packet.geohash || 'u15ek200'}</strong> | Source: <strong>${packet.sourcePubkey || 'node_ephemeral'}</strong>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 0.78rem; font-weight: 700; color: #F59E0B; margin-bottom: 4px;">RAW BITSTREAM HEX (32B Header + Payload)</div>
+      <pre style="background: #090C13; border: 1px solid #1E2839; border-radius: 6px; padding: 10px; font-size: 0.72rem; color: #38BDF8; font-family: var(--font-mono); overflow-x: auto; word-break: break-all; max-height: 110px;">${packet.rawWireHex || 'Hex wire data unavailable'}</pre>
+    </div>
+
+    <div>
+      <div style="font-size: 0.78rem; font-weight: 700; color: #00F5D4; margin-bottom: 4px;">DECODED CLINICAL DELTA / BUNDLE MUTATION</div>
+      <pre style="background: #090C13; border: 1px solid #1E2839; border-radius: 6px; padding: 10px; font-size: 0.72rem; color: #E2E8F0; font-family: var(--font-mono); overflow-x: auto; max-height: 200px;">${decodedFormatted}</pre>
+    </div>
+  `;
+
+  modal.style.display = 'flex';
+};
+
+window.closePacketDetail = function() {
+  const modal = document.getElementById('packetDetailModal');
+  if (modal) modal.style.display = 'none';
+};
+
+// =========================================================================
+// Tactical Mesh Sync & Secure Device Pairing Controller
+// =========================================================================
+
+function logMeshConsole(msg) {
+  const consoleEl = document.getElementById('meshSyncConsole');
+  if (!consoleEl) return;
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.style.marginBottom = '2px';
+  line.innerHTML = `<span style="color:var(--text-muted);">[${time}]</span> ${msg}`;
+  consoleEl.appendChild(line);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+window.openMeshPairingModal = function() {
+  const modal = document.getElementById('meshPairingModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    window.loadMeshStatus();
+    window.scanNearbyPeers();
+  }
+};
+
+window.closeMeshPairingModal = function() {
+  const modal = document.getElementById('meshPairingModal');
+  if (modal) modal.style.display = 'none';
+};
+
+window.loadMeshStatus = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/info`);
+    if (res.ok) {
+      const data = await res.json();
+      window._meshInfo = data;
+
+      const nodeIdEl = document.getElementById('meshLocalNodeId');
+      if (nodeIdEl) nodeIdEl.innerText = data.nodeId || 'node_laptop';
+
+      const addrEl = document.getElementById('meshLocalAddress');
+      if (addrEl) {
+        if (data.ipAddresses && data.ipAddresses.length > 0) {
+          addrEl.innerText = data.ipAddresses.map(ip => `${ip}:${data.port || 4323}`).join(' | ');
+        } else {
+          addrEl.innerText = `0.0.0.0:${data.port || 4323}`;
+        }
+      }
+
+      const pinEl = document.getElementById('meshLocalPinDisplay');
+      if (pinEl && data.pairingPin) {
+        pinEl.innerText = data.pairingPin;
+      }
+
+      // Update mesh badge on dashboard header
+      const meshStatusEl = document.getElementById('meshStatus');
+      if (meshStatusEl) {
+        const peerCount = (data.peers && Array.isArray(data.peers)) ? data.peers.length : 0;
+        const outboxCount = data.outboxCount || 0;
+        meshStatusEl.innerHTML = `<span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent-primary);"></span> Mesh Node: ${data.nodeId || 'local'} | Paired: ${peerCount} | Outbox: ${outboxCount}`;
+      }
+
+      // Render paired peers container
+      renderPairedPeers(data.peers || []);
+    }
+  } catch (err) {
+    console.warn('[Mesh UI] Failed to load mesh status:', err.message);
+  }
+};
+
+function renderPairedPeers(peers) {
+  const container = document.getElementById('meshPairedPeersContainer');
+  if (!container) return;
+
+  if (!peers || peers.length === 0) {
+    container.innerHTML = `
+      <div style="font-size: 0.74rem; color: var(--text-muted); font-style: italic; padding: 10px; background: rgba(255,255,255,0.02); border-radius: 4px; text-align: center;">
+        No active paired mesh nodes. Discover nearby devices or enter IP address & PIN below to pair.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = peers.map(p => {
+    const lastSync = p.lastSyncAt ? new Date(p.lastSyncAt).toLocaleTimeString() : 'Never';
+    const pairedTime = p.pairedAt ? new Date(p.pairedAt).toLocaleTimeString() : 'Active';
+    return `
+      <div style="background: var(--bg-card); border: 1px solid rgba(0, 245, 212, 0.25); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <div>
+          <div style="font-size: 0.82rem; font-weight: 800; color: #FFF; display: flex; align-items: center; gap: 6px;">
+            <span style="color: var(--accent-primary);">🔗</span>
+            <span>${p.nodeId || 'Remote Device'}</span>
+            <span class="badge-mono" style="background: rgba(0, 245, 212, 0.15); color: #00F5D4; font-size: 0.68rem; padding: 1px 6px; border-radius: 3px;">PAIRED</span>
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px;">
+            Address: <code style="color: #38BDF8;">${p.peerAddress}</code> | Paired: ${pairedTime} | Last Sync: <strong>${lastSync}</strong>
+          </div>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button type="button" onclick="selectDiscoveredPeer('${p.peerAddress}')" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #FFF; padding: 4px 8px; border-radius: 3px; font-size: 0.7rem; font-weight: 700; cursor: pointer;">
+            Select
+          </button>
+          <button type="button" onclick="executeMeshSync('${p.peerAddress}')" style="background: var(--triage-green); border: none; color: #000; padding: 4px 10px; border-radius: 3px; font-size: 0.7rem; font-weight: 800; cursor: pointer;">
+            🔄 Sync
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+window.scanNearbyPeers = async function() {
+  const listEl = document.getElementById('meshDiscoveredPeersList');
+  if (!listEl) return;
+
+  listEl.innerHTML = `
+    <div style="font-size: 0.72rem; color: var(--text-muted); padding: 6px; text-align: center;">
+      🔍 Scanning subnet for mDNS & UDP broadcast announcements...
+    </div>
+  `;
+
+  // Default known responder candidate: Android phone running on local network
+  const candidates = [
+    {
+      nodeId: 'node_mobile_flutter',
+      platform: 'android-flutter',
+      address: '10.50.10.15:4322',
+      port: 4322,
+      role: 'TACTICAL_RESPONDER',
+      transport: 'Wi-Fi / mDNS'
+    }
+  ];
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/peers`);
+    if (res.ok) {
+      const peers = await res.json();
+      peers.forEach(p => {
+        if (!candidates.some(c => c.address === p.peerAddress)) {
+          candidates.push({
+            nodeId: p.nodeId,
+            platform: 'paired-peer',
+            address: p.peerAddress,
+            port: parseInt(p.peerAddress.split(':')[1] || '4322'),
+            role: 'FIELD_PEER',
+            transport: 'Mesh Session'
+          });
+        }
+      });
+    }
+  } catch (err) {}
+
+  setTimeout(() => {
+    if (candidates.length === 0) {
+      listEl.innerHTML = `<div style="font-size:0.72rem; color:var(--text-muted); font-style:italic; padding:4px;">No devices responded to discovery yet. Enter address manually below.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = candidates.map(c => `
+      <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <div>
+          <div style="font-size: 0.78rem; font-weight: 700; color: #FFF; display: flex; align-items: center; gap: 6px;">
+            <span>📱</span>
+            <span>${c.nodeId}</span>
+            <span style="font-size: 0.65rem; background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono);">${c.platform}</span>
+          </div>
+          <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 1px;">
+            Target: <code style="color: var(--accent-primary);">${c.address}</code> (${c.transport})
+          </div>
+        </div>
+        <div style="display: flex; gap: 4px;">
+          <button type="button" onclick="selectDiscoveredPeer('${c.address}')" style="background: var(--accent-primary); border: none; color: #000; font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 3px; cursor: pointer;">
+            SELECT
+          </button>
+        </div>
+      </div>
+    `).join('');
+    logMeshConsole(`[DISCOVERY] Found ${candidates.length} mesh device candidate(s).`);
+  }, 400);
+};
+
+window.selectDiscoveredPeer = function(address) {
+  const input = document.getElementById('peerAddressInput');
+  if (input) {
+    input.value = address;
+  }
+  window.probeMeshPeer();
+};
+
+window.probeMeshPeer = async function() {
+  const addressInput = document.getElementById('peerAddressInput');
+  const banner = document.getElementById('meshStatusBanner');
+  if (!addressInput) return;
+  const address = addressInput.value.trim();
+
+  if (!address) {
+    showToast('Please enter a peer address (e.g. 10.50.10.15:4322)', 'warning');
+    return;
+  }
+
+  if (banner) {
+    banner.style.display = 'block';
+    banner.style.background = 'rgba(56, 189, 248, 0.15)';
+    banner.style.border = '1px solid #38BDF8';
+    banner.style.color = '#38BDF8';
+    banner.innerHTML = `🔍 Probing endpoint <strong>http://${address}/api/v1/sync/info</strong>...`;
+  }
+  logMeshConsole(`[PROBE] Probing peer status at ${address}...`);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/probe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerAddress: address })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      logMeshConsole(`[PROBE OK] Node: ${data.nodeId || 'unknown'} | Platform: ${data.platform} | Outbox: ${data.outboxCount ?? 0} | Pairing: ${data.requiresPairing ? 'REQUIRED' : 'ESTABLISHED'}`);
+      if (banner) {
+        banner.style.background = 'rgba(0, 245, 212, 0.12)';
+        banner.style.border = '1px solid #00F5D4';
+        banner.style.color = '#00F5D4';
+        banner.innerHTML = `
+          <div style="font-weight: 800; margin-bottom: 2px;">🟢 PEER REACHABLE &amp; ONLINE</div>
+          <div>Node ID: <code>${data.nodeId || 'unknown'}</code> | Platform: <code>${data.platform || 'remote'}</code> | Port: <code>${data.port || 4322}</code> | Pending Outbox: <strong>${data.outboxCount ?? 0}</strong> events</div>
+          ${data.requiresPairing 
+            ? '<div style="margin-top: 4px; color: #F59E0B; font-weight: 700;">⚠️ Mutual HKDF-SHA256 Pairing Required: Enter the 6-digit PIN shown on the phone screen and click "Pair Device".</div>'
+            : '<div style="margin-top: 4px; color: #00F5D4; font-weight: 700;">✅ Active session established. Ready to synchronize data.</div>'
+          }
+        `;
+      }
+    } else {
+      throw new Error(data.error || res.statusText);
+    }
+  } catch (err) {
+    logMeshConsole(`[PROBE ERROR] Unable to reach ${address}: ${err.message}`);
+    if (banner) {
+      banner.style.background = 'rgba(239, 68, 68, 0.15)';
+      banner.style.border = '1px solid #EF4444';
+      banner.style.color = '#EF4444';
+      banner.innerHTML = `
+        <div style="font-weight: 800; margin-bottom: 2px;">❌ PEER UNREACHABLE</div>
+        <div>${err.message}</div>
+        <div style="font-size: 0.7rem; color: #FCA5A5; margin-top: 4px;">Make sure the PeerScribe app is running on the phone, connected to the same Wi-Fi subnet, and listening on port 4322.</div>
+      `;
+    }
+  }
+};
+
+window.executeDevicePairing = async function() {
+  const addressInput = document.getElementById('peerAddressInput');
+  const pinInput = document.getElementById('peerPinInput');
+  const banner = document.getElementById('meshStatusBanner');
+  const pairBtn = document.getElementById('btnPairPeer');
+
+  const address = addressInput ? addressInput.value.trim() : '';
+  const pin = pinInput ? pinInput.value.trim() : '';
+
+  if (!address) {
+    showToast('Peer address is required (e.g. 10.50.10.15:4322)', 'warning');
+    return;
+  }
+  if (!pin) {
+    showToast('Please enter the 6-digit PIN shown on the mobile screen (e.g. TACTICAL-XXXXXX or XXXXXX)', 'warning');
+    if (pinInput) pinInput.focus();
+    return;
+  }
+
+  if (pairBtn) {
+    pairBtn.disabled = true;
+    pairBtn.innerText = '⏳ Pairing...';
+  }
+
+  logMeshConsole(`[PAIR] Initiating secure mutual HKDF handshake with ${address}...`);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerAddress: address, pairingPin: pin })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      logMeshConsole(`[PAIR OK] Session negotiated: ${data.sessionId} with ${data.serverNodeId || address}`);
+      showToast(`Device paired successfully with ${data.serverNodeId || address}!`, 'success');
+      if (banner) {
+        banner.style.display = 'block';
+        banner.style.background = 'rgba(0, 245, 212, 0.15)';
+        banner.style.border = '1px solid #00F5D4';
+        banner.style.color = '#00F5D4';
+        banner.innerHTML = `
+          <div style="font-weight: 800;">✅ SECURE PAIRING ESTABLISHED</div>
+          <div>Negotiated HKDF-SHA256 session token with <code>${data.serverNodeId || address}</code>. Encrypted delta synchronization is now enabled.</div>
+        `;
+      }
+      await window.loadMeshStatus();
+      // Auto-trigger delta synchronization after pairing
+      window.executeMeshSync(address);
+    } else {
+      throw new Error(data.error || res.statusText);
+    }
+  } catch (err) {
+    logMeshConsole(`[PAIR ERROR] Handshake failed: ${err.message}`);
+    showToast(`Pairing failed: ${err.message}`, 'error');
+    if (banner) {
+      banner.style.display = 'block';
+      banner.style.background = 'rgba(239, 68, 68, 0.15)';
+      banner.style.border = '1px solid #EF4444';
+      banner.style.color = '#EF4444';
+      banner.innerHTML = `
+        <div style="font-weight: 800;">❌ PAIRING HANDSHAKE REJECTED</div>
+        <div>${err.message}</div>
+        <div style="font-size: 0.7rem; color: #FCA5A5; margin-top: 4px;">Verify that the 6-digit PIN matches the one displayed in the mobile app.</div>
+      `;
+    }
+  } finally {
+    if (pairBtn) {
+      pairBtn.disabled = false;
+      pairBtn.innerText = '🔗 Pair Device';
+    }
+  }
+};
+
+window.executeMeshSync = async function(targetAddress) {
+  const addressInput = document.getElementById('peerAddressInput');
+  const pinInput = document.getElementById('peerPinInput');
+  const banner = document.getElementById('meshStatusBanner');
+  const syncBtn = document.getElementById('btnSyncPeer');
+
+  const address = (typeof targetAddress === 'string' && targetAddress) ? targetAddress : (addressInput ? addressInput.value.trim() : '');
+  const pin = pinInput ? pinInput.value.trim() : '';
+
+  if (!address) {
+    showToast('Peer address is required for sync', 'warning');
+    return;
+  }
+
+  if (syncBtn) {
+    syncBtn.disabled = true;
+    syncBtn.innerText = '🔄 Syncing...';
+  }
+
+  logMeshConsole(`[SYNC] Sending encrypted delta bundle to ${address}...`);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerAddress: address, pairingPin: pin || undefined })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      const sent = data.eventsSent ?? 0;
+      const rcvd = data.eventsReceived ?? data.inboundApplied ?? 0;
+      logMeshConsole(`[SYNC COMPLETE] Exchanged clinical bundle: Sent ${sent} events, Ingested ${rcvd} events.`);
+      showToast(`Mesh sync successful! Outbox sent: ${sent}, Inbound received: ${rcvd}`, 'success');
+
+      if (banner) {
+        banner.style.display = 'block';
+        banner.style.background = 'rgba(0, 245, 212, 0.15)';
+        banner.style.border = '1px solid #00F5D4';
+        banner.style.color = '#00F5D4';
+        banner.innerHTML = `
+          <div style="font-weight: 800;">🔄 SYNCHRONIZATION COMPLETED</div>
+          <div>Clinical deltas exchanged with <code>${address}</code>: Sent <strong>${sent}</strong> events | Received <strong>${rcvd}</strong> events. Local SQLite and CRDT doc updated.</div>
+        `;
+      }
+
+      await window.loadMeshStatus();
+      await loadBackendPatients();
+    } else {
+      throw new Error(data.error || res.statusText);
+    }
+  } catch (err) {
+    logMeshConsole(`[SYNC ERROR] ${err.message}`);
+    showToast(`Sync failed: ${err.message}`, 'error');
+    if (banner) {
+      banner.style.display = 'block';
+      banner.style.background = 'rgba(239, 68, 68, 0.15)';
+      banner.style.border = '1px solid #EF4444';
+      banner.style.color = '#EF4444';
+      banner.innerHTML = `
+        <div style="font-weight: 800;">❌ SYNCHRONIZATION FAILED</div>
+        <div>${err.message}</div>
+      `;
+    }
+  } finally {
+    if (syncBtn) {
+      syncBtn.disabled = false;
+      syncBtn.innerText = '🔄 Sync Now';
+    }
+  }
+};
+
+window.regenerateLocalPin = async function() {
+  const newPin = `TACTICAL-${Math.floor(100000 + Math.random() * 900000)}`;
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/mesh/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingPin: newPin })
+    });
+    if (res.ok) {
+      const pinEl = document.getElementById('meshLocalPinDisplay');
+      if (pinEl) pinEl.innerText = newPin;
+      showToast(`Pairing PIN regenerated: ${newPin}`, 'info');
+      logMeshConsole(`[SECURITY] Local pairing PIN rotated to ${newPin}`);
+    }
+  } catch (err) {
+    showToast('Failed to rotate pairing PIN', 'error');
+  }
+};
+
+// Universal Modal Backdrop & ESC Dismissal
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.style.display = 'none';
+        if (overlay.id === 'confirmationModal') pendingConfirmationAction = null;
+      }
+    });
+  });
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay').forEach(m => {
+      m.style.display = 'none';
+    });
+    pendingConfirmationAction = null;
+  }
+});
