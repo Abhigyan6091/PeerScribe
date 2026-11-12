@@ -4,6 +4,8 @@ import 'package:peerscribe_mobile/core/protocol/event_model.dart';
 import 'package:peerscribe_mobile/core/storage/database_helper.dart';
 import 'package:peerscribe_mobile/core/sync/sync_manager.dart';
 import 'package:peerscribe_mobile/core/sync/lan_sync_service.dart';
+import 'package:peerscribe_mobile/core/sync/mdns_discovery_service.dart';
+import 'package:peerscribe_mobile/core/sync/ble_mesh_service.dart';
 import 'package:peerscribe_mobile/core/sync/delta_update_manager.dart';
 import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
 import 'theme.dart';
@@ -16,8 +18,9 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _currentMode = 'FIELD'; // DORMANT | FIELD | EMERGENCY
+  ResponderRole _currentRole = ResponderRole.medicalResponder;
   final DatabaseHelper _db = DatabaseHelper();
   final SyncManager _sync = SyncManager();
 
@@ -25,12 +28,29 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ProjectedPatient> _patients = [];
   int _outboxCount = 0;
   int _unresolvedDivergencesCount = 0;
+  List<String> _localIps = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initServices();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      LanSyncService().ensureServerRunning().then((_) {
+        if (mounted) _refreshState();
+      });
+    }
   }
 
   Future<void> _initServices() async {
@@ -43,7 +63,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _refreshState() async {
     final op = await _db.getActiveOperation();
     final events = await _db.getAllEvents();
-    final outbox = await _db.getOutbox();
+    final outboxCount = await _db.getOutboxCount();
+    final localIps = await LanSyncService().getLocalIpAddresses();
 
     // Group events by patient entityId
     final Map<String, List<PeerScribeEvent>> grouped = {};
@@ -64,7 +85,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _operation = op;
       _patients = patients;
-      _outboxCount = outbox.length;
+      _outboxCount = outboxCount;
+      _localIps = localIps;
       _unresolvedDivergencesCount = divCount;
       _isLoading = false;
     });
@@ -109,11 +131,15 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final hostController = TextEditingController(text: '10.0.2.2:4323');
+    final hostController = TextEditingController(text: '10.50.47.100:4323');
     final pinController = TextEditingController();
     bool isSyncing = false;
     String? syncStatusMessage;
     bool? syncSuccess;
+
+    // Trigger immediate mDNS & BLE scan
+    MdnsDiscoveryService().queryPeers();
+    BleMeshService().startScanning();
 
     try {
       await showDialog(
@@ -121,72 +147,213 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (dialogCtx) {
           return StatefulBuilder(
             builder: (context, setDialogState) {
+              final discovered = MdnsDiscoveryService().discoveredPeers;
+
               return AlertDialog(
                 backgroundColor: TacticalTheme.surface,
                 title: Row(
                   children: const [
                     Icon(Icons.wifi_tethering, color: TacticalTheme.primary),
                     SizedBox(width: 8),
-                    Text('TACTICAL LAN SYNC', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                    Text('TACTICAL MESH & P2P SYNC', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                   ],
                 ),
-                content: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Local Mesh Listener: Port ${LanSyncService().port}',
-                        style: const TextStyle(color: TacticalTheme.primary, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'This Device Pairing PIN: ${LanSyncService().pairingPin}',
-                        style: const TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: hostController,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: 'Peer Address (Host:Port)',
-                          hintText: 'e.g. 192.168.1.15:4323 or 10.0.2.2:4323',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: pinController,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: 'Peer Pairing PIN',
-                          hintText: 'e.g. TACTICAL-123456',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      if (isSyncing) ...[
-                        const SizedBox(height: 16),
-                        const Center(child: CircularProgressIndicator()),
-                      ],
-                      if (syncStatusMessage != null) ...[
-                        const SizedBox(height: 12),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Local Node Identity Box
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: (syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed).withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed),
+                            color: TacticalTheme.background,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.white12),
                           ),
-                          child: Text(
-                            syncStatusMessage!,
-                            style: TextStyle(
-                              color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed,
-                              fontSize: 12,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Node: ${LanSyncService().nodeId}',
+                                    style: const TextStyle(color: TacticalTheme.textPrimary, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    'Port: ${LanSyncService().port}',
+                                    style: const TextStyle(color: TacticalTheme.primary, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                'Local IPv4: ${_localIps.isNotEmpty ? _localIps.join(", ") : "127.0.0.1"}',
+                                style: const TextStyle(color: TacticalTheme.textSecondary, fontSize: 11),
+                              ),
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  const Text('This Device PIN: ', style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11)),
+                                  SelectableText(
+                                    LanSyncService().pairingPin,
+                                    style: const TextStyle(color: TacticalTheme.triageGreen, fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // Discovered Nearby Peers (mDNS & BLE)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'DISCOVERED PEERS (mDNS / BLE)',
+                              style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.refresh, size: 16, color: TacticalTheme.primary),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              tooltip: 'Refresh Discovery Scan',
+                              onPressed: () {
+                                MdnsDiscoveryService().queryPeers();
+                                setDialogState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+
+                        if (discovered.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.white10),
+                            ),
+                            child: Row(
+                              children: const [
+                                SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: TacticalTheme.primary)),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Listening for mDNS beacons & BLE responders...',
+                                    style: TextStyle(color: TacticalTheme.textMuted, fontSize: 11, fontStyle: FontStyle.italic),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          Column(
+                            children: discovered.map((peer) {
+                              return Card(
+                                color: Colors.white.withOpacity(0.04),
+                                margin: const EdgeInsets.only(bottom: 6),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                  side: BorderSide(color: TacticalTheme.primary.withOpacity(0.3)),
+                                ),
+                                child: ListTile(
+                                  dense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                  leading: Icon(
+                                    peer.medium == 'BLE' ? Icons.bluetooth : Icons.devices,
+                                    color: TacticalTheme.primary,
+                                    size: 20,
+                                  ),
+                                  title: Text(
+                                    '${peer.nodeId} (${peer.medium})',
+                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  subtitle: Text(
+                                    '${peer.ipAddress}:${peer.port} • Role: ${peer.role}',
+                                    style: const TextStyle(color: TacticalTheme.textMuted, fontSize: 10),
+                                  ),
+                                  trailing: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: TacticalTheme.primary,
+                                      foregroundColor: Colors.black,
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                      minimumSize: const Size(50, 26),
+                                    ),
+                                    onPressed: () {
+                                      setDialogState(() {
+                                        hostController.text = '${peer.ipAddress}:${peer.port}';
+                                        if (peer.pairingPin != null && peer.pairingPin!.isNotEmpty) {
+                                          pinController.text = peer.pairingPin!;
+                                        }
+                                      });
+                                    },
+                                    child: const Text('SELECT', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+
+                        const SizedBox(height: 12),
+                        const Text(
+                          'CONNECT & PAIR PEER',
+                          style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 6),
+
+                        TextField(
+                          controller: hostController,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            labelText: 'Peer Address (Host:Port or IP)',
+                            hintText: 'e.g. 10.50.47.100:4323',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: pinController,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            labelText: 'Peer Pairing PIN',
+                            hintText: 'e.g. TACTICAL-XXXXXX',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+
+                        if (isSyncing) ...[
+                          const SizedBox(height: 14),
+                          const Center(child: CircularProgressIndicator(color: TacticalTheme.primary)),
+                        ],
+
+                        if (syncStatusMessage != null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: (syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed).withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed),
+                            ),
+                            child: Text(
+                              syncStatusMessage!,
+                              style: TextStyle(
+                                color: syncSuccess == true ? TacticalTheme.triageGreen : TacticalTheme.triageRed,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
                 actions: [
@@ -194,19 +361,75 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: isSyncing ? null : () => Navigator.pop(dialogCtx),
                     child: const Text('CLOSE', style: TextStyle(color: TacticalTheme.textMuted)),
                   ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: TacticalTheme.primary, foregroundColor: Colors.black),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: TacticalTheme.primary,
+                      side: const BorderSide(color: TacticalTheme.primary),
+                    ),
                     onPressed: isSyncing ? null : () async {
+                      final host = hostController.text.trim();
+                      final pin = pinController.text.trim();
+                      if (host.isEmpty || pin.isEmpty) {
+                        setDialogState(() {
+                          syncSuccess = false;
+                          syncStatusMessage = 'Both Peer Host and Pairing PIN are required for pairing.';
+                        });
+                        return;
+                      }
+
                       setDialogState(() {
                         isSyncing = true;
-                        syncStatusMessage = 'Connecting to peer at ${hostController.text.trim()}...';
+                        syncStatusMessage = 'Initiating mutual authenticated pairing with $host...';
                         syncSuccess = null;
                       });
 
-                      final pinText = pinController.text.trim();
+                      try {
+                        final creds = await LanSyncService().pairWithPeer(host, pin);
+                        if (mounted) await _refreshState();
+                        if (dialogCtx.mounted) {
+                          setDialogState(() {
+                            isSyncing = false;
+                            syncSuccess = true;
+                            syncStatusMessage = 'Securely Paired with ${creds['serverNodeId']}! HKDF session established.';
+                          });
+                        }
+                      } catch (err) {
+                        if (dialogCtx.mounted) {
+                          setDialogState(() {
+                            isSyncing = false;
+                            syncSuccess = false;
+                            syncStatusMessage = 'Pairing Failed: $err';
+                          });
+                        }
+                      }
+                    },
+                    child: const Text('PAIR DEVICE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: TacticalTheme.primary,
+                      foregroundColor: Colors.black,
+                    ),
+                    onPressed: isSyncing ? null : () async {
+                      final host = hostController.text.trim();
+                      final pin = pinController.text.trim();
+                      if (host.isEmpty) {
+                        setDialogState(() {
+                          syncSuccess = false;
+                          syncStatusMessage = 'Peer Host Address is required.';
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isSyncing = true;
+                        syncStatusMessage = 'Exchanging encrypted clinical bundle with $host...';
+                        syncSuccess = null;
+                      });
+
                       final result = await LanSyncService().syncWithPeer(
-                        hostController.text.trim(),
-                        pairingPin: pinText.isNotEmpty ? pinText : null,
+                        host,
+                        pairingPin: pin.isNotEmpty ? pin : null,
                       );
                       if (mounted) {
                         await _refreshState();
@@ -224,7 +447,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         });
                       }
                     },
-                    child: const Text('SYNC NOW', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: const Text('SYNC NOW', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ],
               );
@@ -239,6 +462,44 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) {
       await _refreshState();
     }
+  }
+
+  Widget _buildRoleBadge() {
+    return PopupMenuButton<ResponderRole>(
+      initialValue: _currentRole,
+      tooltip: 'Switch Responder Role',
+      onSelected: (role) {
+        setState(() => _currentRole = role);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Switched to ${role.name} Role')),
+        );
+      },
+      itemBuilder: (context) => ResponderRole.values.map((role) {
+        return PopupMenuItem(
+          value: role,
+          child: Text(role.name.replaceAll('_', ' ')),
+        );
+      }).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: TacticalTheme.primary.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: TacticalTheme.primary, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.badge, size: 14, color: TacticalTheme.primary),
+            const SizedBox(width: 4),
+            Text(
+              _currentRole.name.replaceAll('_', ' '),
+              style: const TextStyle(color: TacticalTheme.primary, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildModeBadge() {
@@ -333,6 +594,8 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Check Delta Updates',
             onPressed: _checkForDeltaUpdates,
           ),
+          Center(child: _buildRoleBadge()),
+          const SizedBox(width: 8),
           Padding(
             padding: const EdgeInsets.only(right: 12.0),
             child: Center(child: _buildModeBadge()),
@@ -483,7 +746,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onTap: () {
                                 Navigator.push(
                                   context,
-                                  MaterialPageRoute(builder: (_) => CasualtyDossierScreen(patientId: p.patientId)),
+                                  MaterialPageRoute(builder: (_) => CasualtyDossierScreen(patientId: p.patientId, currentRole: _currentRole)),
                                 ).then((_) => _refreshState());
                               },
                             ),

@@ -18,6 +18,7 @@ class ProjectedPatient {
   final List<String> knownAllergies;
   final List<Map<String, dynamic>> notes;
   final List<Map<String, dynamic>> divergenceFlags;
+  final List<Map<String, dynamic>> authorizationFailures;
 
   ProjectedPatient({
     required this.patientId,
@@ -37,6 +38,7 @@ class ProjectedPatient {
     required this.knownAllergies,
     required this.notes,
     required this.divergenceFlags,
+    this.authorizationFailures = const [],
   });
 
   static ProjectedPatient? project(List<PeerScribeEvent> events) {
@@ -53,21 +55,21 @@ class ProjectedPatient {
       return a.eventId.compareTo(b.eventId);
     });
 
-    final creation = sorted.firstWhere(
+    final creationEvent = sorted.firstWhere(
       (e) => e.eventType == 'PATIENT_CREATED',
       orElse: () => sorted.first,
     );
 
     final patient = ProjectedPatient(
-      patientId: creation.entityId,
-      operationId: creation.operationId,
-      ephemeralId: creation.payload['ephemeral_id']?.toString() ?? 'TAG-UNKNOWN',
+      patientId: creationEvent.entityId,
+      operationId: creationEvent.operationId,
+      ephemeralId: creationEvent.payload['ephemeral_id']?.toString() ?? 'UNKNOWN-00',
       activeTriage: 'UNASSESSED',
       triageDisplayLabel: 'UNASSESSED',
       divergenceState: 'NONE',
       divergentCategories: [],
-      createdAtUtc: creation.occurredAtUtc,
-      updatedAtUtc: creation.occurredAtUtc,
+      createdAtUtc: creationEvent.occurredAtUtc,
+      updatedAtUtc: creationEvent.occurredAtUtc,
       vectorClock: {},
       triageHistory: [],
       vitals: [],
@@ -76,6 +78,7 @@ class ProjectedPatient {
       knownAllergies: [],
       notes: [],
       divergenceFlags: [],
+      authorizationFailures: [],
     );
 
     String? resolvedCategory;
@@ -130,6 +133,7 @@ class ProjectedPatient {
             patient.triageHistory.add({
               'event_id': evt.eventId,
               'actor_id': evt.actorId,
+              'actor_role': evt.actorRole,
               'category': cat,
               'lamport_timestamp': evt.lamportTimestamp,
               'occurred_at_utc': evt.occurredAtUtc,
@@ -154,6 +158,14 @@ class ProjectedPatient {
               f['resolution_note'] = evt.payload['clinician_signoff_note'];
             }
           }
+          break;
+        case 'AUTHORIZATION_FAILED':
+          patient.authorizationFailures.add({
+            'event_id': evt.eventId,
+            'timestamp': evt.occurredAtUtc,
+            'actor_id': evt.actorId,
+            ...evt.payload,
+          });
           break;
       }
     }

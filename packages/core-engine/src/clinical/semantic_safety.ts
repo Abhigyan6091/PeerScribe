@@ -13,7 +13,7 @@ const ALLERGY_SYNONYMS: Record<string, string[]> = {
 /**
  * Check if a medication matches a documented allergy or drug class.
  */
-function isAllergyCollision(drugName: string, allergyName: string): boolean {
+export function isAllergyCollision(drugName: string, allergyName: string): boolean {
   const normDrug = drugName.toLowerCase().trim();
   const normAllergy = allergyName.toLowerCase().trim();
 

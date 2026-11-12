@@ -94,6 +94,35 @@ export class PeerScribeDatabase {
   }
 
   // --- Operations ---
+  listOperations(): { operation_id: string; name: string; sector_geohash: string | null; status: string; created_at: number }[] {
+    const stmt = this.db.prepare('SELECT * FROM operations ORDER BY created_at DESC');
+    return stmt.all() as any[];
+  }
+
+  getOperation(opId: string): { operation_id: string; name: string; sector_geohash: string | null; status: string; created_at: number } | null {
+    const stmt = this.db.prepare('SELECT * FROM operations WHERE operation_id = ?');
+    const row = stmt.get(opId);
+    return row ? (row as any) : null;
+  }
+
+  updateOperationStatus(opId: string, status: 'ACTIVE' | 'FINALIZING' | 'ARCHIVED'): void {
+    const stmt = this.db.prepare('UPDATE operations SET status = ? WHERE operation_id = ?');
+    stmt.run(status, opId);
+  }
+
+  archiveOperationData(opId: string): { operationId: string; patientCount: number; archivedAt: number; archiveDigest: string } {
+    this.updateOperationStatus(opId, 'ARCHIVED');
+    const patients = this.listPatientDocuments(opId);
+    const crypto = (globalThis as any).crypto || null;
+    const digest = `${opId}_${Date.now()}_${patients.length}`;
+    return {
+      operationId: opId,
+      patientCount: patients.length,
+      archivedAt: Date.now(),
+      archiveDigest: digest
+    };
+  }
+
   createOperation(opId: string, name: string, sectorGeohash?: string): void {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO operations (operation_id, name, sector_geohash, status, created_at)

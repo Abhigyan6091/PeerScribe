@@ -10,6 +10,8 @@ import '../protocol/event_model.dart';
 import '../protocol/sync_bundle.dart';
 import '../storage/database_helper.dart';
 import 'sync_manager.dart';
+import 'mdns_discovery_service.dart';
+import 'ble_mesh_service.dart';
 
 const int defaultTacticalMobilePort = 4322;
 const int maxRequestSizeBytes = 2 * 1024 * 1024; // 2 MB limit
@@ -167,46 +169,155 @@ class LanSyncService {
     return json.decode(utf8.decode(decryptedBytes));
   }
 
+  /// Returns a list of active non-loopback IPv4 addresses assigned to this device.
+  Future<List<String>> getLocalIpAddresses() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      final addresses = <String>[];
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && addr.address.isNotEmpty) {
+            addresses.add(addr.address);
+          }
+        }
+      }
+      return addresses.isNotEmpty ? addresses : ['127.0.0.1'];
+    } catch (e) {
+      print('[LanSyncService] Notice: Could not query network interfaces: $e');
+      return ['127.0.0.1'];
+    }
+  }
+
+  /// Sends a JSON response with robust error handling to prevent unhandled async exceptions
+  /// if a client terminates its connection prematurely.
+  Future<void> _safeSendJsonResponse(
+    HttpRequest request,
+    int statusCode,
+    Map<String, dynamic> data,
+  ) async {
+    final response = request.response;
+    try {
+      response.statusCode = statusCode;
+      response.headers.contentType = ContentType.json;
+      response.headers.set('Access-Control-Allow-Origin', '*');
+      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      response.headers.set(
+        'Access-Control-Allow-Headers',
+        'Content-Type, X-PeerScribe-Session, X-PeerScribe-Token, X-PeerScribe-Peer-Id, X-PeerScribe-Nonce, X-PeerScribe-Timestamp',
+      );
+      final payload = json.encode(data);
+      response.write(payload);
+      await response.close();
+      print('[LanSyncService] Response $statusCode sent for ${request.method} ${request.uri.path}');
+    } catch (err) {
+      print('[LanSyncService] Socket write notice for ${request.method} ${request.uri.path}: $err');
+      try {
+        await response.close();
+      } catch (_) {}
+    }
+  }
+
   /// Starts the embedded tactical HTTP server on the mobile device.
   Future<int> startServer({int port = defaultTacticalMobilePort}) async {
     if (_server != null) return _port;
     _port = port;
 
     try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
-      _server!.listen(_handleIncomingRequest);
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port, shared: true);
+      _server!.listen(
+        _handleIncomingRequest,
+        onError: (err, stack) {
+          print('[LanSyncService] HTTP Server socket stream error: $err\n$stack');
+        },
+        cancelOnError: false,
+      );
+      print('[LanSyncService] Server listening on port $_port (shared: true)');
+      _initDiscoveryServices();
       return _port;
-    } catch (_) {
-      // If port is occupied, try fallback port
-      _port = port + 10;
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
-      _server!.listen(_handleIncomingRequest);
-      return _port;
+    } catch (bindErr) {
+      print('[LanSyncService] Port $port unavailable ($bindErr), attempting fallback port ${port + 10}...');
+      try {
+        _port = port + 10;
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, _port, shared: true);
+        _server!.listen(
+          _handleIncomingRequest,
+          onError: (err, stack) {
+            print('[LanSyncService] HTTP Server socket stream error: $err\n$stack');
+          },
+          cancelOnError: false,
+        );
+        print('[LanSyncService] Fallback server listening on port $_port');
+        _initDiscoveryServices();
+        return _port;
+      } catch (fallbackErr) {
+        print('[LanSyncService] Failed to bind to fallback port $_port: $fallbackErr');
+        rethrow;
+      }
     }
   }
 
-  void _handleIncomingRequest(HttpRequest request) async {
-    final response = request.response;
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    response.headers.set('Access-Control-Allow-Headers',
-      'Content-Type, X-PeerScribe-Session, X-PeerScribe-Token, X-PeerScribe-Peer-Id, X-PeerScribe-Nonce, X-PeerScribe-Timestamp');
+  /// Ensures server is active, restarting if it was closed or killed.
+  Future<int> ensureServerRunning() async {
+    if (_server == null) {
+      print('[LanSyncService] Server instance was inactive. Restarting on port $_port...');
+      return await startServer(port: _port);
+    }
+    _initDiscoveryServices();
+    return _port;
+  }
 
-    if (request.method == 'OPTIONS') {
-      response.statusCode = HttpStatus.noContent;
-      await response.close();
+  void _initDiscoveryServices() {
+    getLocalIpAddresses().then((localIps) {
+      MdnsDiscoveryService().startDiscovery(
+        localNodeId: _nodeId,
+        localPort: _port,
+        pairingPin: _activePairingPin,
+        localIps: localIps,
+      );
+      BleMeshService().startAdvertising(
+        localNodeId: _nodeId,
+        localRole: ResponderRole.medicalResponder,
+        geohash: 'u15ek200',
+        port: _port,
+        pairingPin: _activePairingPin,
+        ipAddress: localIps.isNotEmpty ? localIps.first : '127.0.0.1',
+      );
+      BleMeshService().startScanning();
+    }).catchError((_) {});
+  }
+
+  void _handleIncomingRequest(HttpRequest request) async {
+    final clientIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+    final method = request.method;
+    final path = request.uri.path;
+    print('[LanSyncService] INCOMING $method $path from $clientIp');
+
+    if (method == 'OPTIONS') {
+      try {
+        final response = request.response;
+        response.statusCode = HttpStatus.noContent;
+        response.headers.set('Access-Control-Allow-Origin', '*');
+        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        response.headers.set(
+          'Access-Control-Allow-Headers',
+          'Content-Type, X-PeerScribe-Session, X-PeerScribe-Token, X-PeerScribe-Peer-Id, X-PeerScribe-Nonce, X-PeerScribe-Timestamp',
+        );
+        await response.close();
+      } catch (err) {
+        print('[LanSyncService] Error closing OPTIONS response: $err');
+      }
       return;
     }
-
-    final path = request.uri.path;
 
     try {
       // Enforce 2 MB maximum payload limit
       if (request.contentLength > maxRequestSizeBytes) {
-        response.statusCode = HttpStatus.requestEntityTooLarge;
-        response.headers.contentType = ContentType.json;
-        response.write(json.encode({'error': 'Payload Too Large: Exceeds 2 MB limit'}));
-        await response.close();
+        await _safeSendJsonResponse(request, HttpStatus.requestEntityTooLarge, {
+          'error': 'Payload Too Large: Exceeds 2 MB limit'
+        });
         return;
       }
 
@@ -214,21 +325,35 @@ class LanSyncService {
       // Route: GET /api/v1/sync/info
       // Returns safe discovery metadata only; NEVER exposes secrets or tokens!
       // -----------------------------------------------------------------
-      if (path == '/api/v1/sync/info' && request.method == 'GET') {
-        final outbox = await _db.getOutbox();
-        final op = await _db.getActiveOperation();
-        response.headers.contentType = ContentType.json;
-        response.write(json.encode({
+      if (path == '/api/v1/sync/info' && method == 'GET') {
+        int outboxCount = 0;
+        try {
+          outboxCount = await _db.getOutboxCount();
+        } catch (e) {
+          print('[LanSyncService] Outbox count query failed: $e');
+        }
+
+        String opId = 'OP_MOBILE_TACTICAL_01';
+        try {
+          final op = await _db.getActiveOperation();
+          opId = op['operation_id'] as String? ?? opId;
+        } catch (e) {
+          print('[LanSyncService] Active operation query failed: $e');
+        }
+
+        final ips = await getLocalIpAddresses();
+
+        await _safeSendJsonResponse(request, HttpStatus.ok, {
           'status': 'OK',
           'nodeId': _nodeId,
           'appVersion': '1.0.0',
           'platform': 'android-flutter',
           'port': _port,
-          'operationId': op['operation_id'],
-          'outboxCount': outbox.length,
+          'ipAddresses': ips,
+          'operationId': opId,
+          'outboxCount': outboxCount,
           'requiresPairing': true,
-        }));
-        await response.close();
+        });
         return;
       }
 
@@ -237,10 +362,9 @@ class LanSyncService {
       await for (final chunk in request) {
         bodyBytes.addAll(chunk);
         if (bodyBytes.length > maxRequestSizeBytes) {
-          response.statusCode = HttpStatus.requestEntityTooLarge;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Payload Too Large: Exceeds 2 MB limit'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.requestEntityTooLarge, {
+            'error': 'Payload Too Large: Exceeds 2 MB limit'
+          });
           return;
         }
       }
@@ -250,10 +374,9 @@ class LanSyncService {
         try {
           jsonBody = json.decode(utf8.decode(bodyBytes)) as Map<String, dynamic>;
         } catch (_) {
-          response.statusCode = HttpStatus.badRequest;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Malformed JSON payload'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+            'error': 'Malformed JSON payload'
+          });
           return;
         }
       }
@@ -262,32 +385,29 @@ class LanSyncService {
       // Route: POST /api/v1/sync/pair
       // Explicit pairing handshake via PIN with mutual nonces & HKDF derivation
       // -----------------------------------------------------------------
-      if (path == '/api/v1/sync/pair' && request.method == 'POST') {
+      if (path == '/api/v1/sync/pair' && method == 'POST') {
         final clientNodeId = jsonBody['client_node_id'] as String?;
         final providedPin = jsonBody['pairing_pin'] as String?;
         final clientNonce = jsonBody['client_nonce'] as String?;
 
         if (clientNodeId == null || providedPin == null || clientNonce == null) {
-          response.statusCode = HttpStatus.badRequest;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Missing required pairing fields (client_node_id, pairing_pin, client_nonce)'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+            'error': 'Missing required pairing fields (client_node_id, pairing_pin, client_nonce)'
+          });
           return;
         }
 
         if (DateTime.now().millisecondsSinceEpoch > _pairingPinExpiresAt) {
-          response.statusCode = HttpStatus.unauthorized;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Pairing PIN expired. Request a fresh PIN from the host device.'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.unauthorized, {
+            'error': 'Pairing PIN expired. Request a fresh PIN from the host device.'
+          });
           return;
         }
 
         if (providedPin.trim() != _activePairingPin.trim()) {
-          response.statusCode = HttpStatus.unauthorized;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Invalid pairing PIN'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.unauthorized, {
+            'error': 'Invalid pairing PIN'
+          });
           return;
         }
 
@@ -313,17 +433,14 @@ class LanSyncService {
           'seenNonces': <String>{},
         };
 
-        response.statusCode = HttpStatus.ok;
-        response.headers.contentType = ContentType.json;
-        response.write(json.encode({
+        await _safeSendJsonResponse(request, HttpStatus.ok, {
           'status': 'PAIRED',
           'session_id': sessionId,
           'session_token': base64.encode(derived['sessionToken']!),
           'server_nonce': serverNonce,
           'server_node_id': _nodeId,
           'expires_in_seconds': sessionTtlMs ~/ 1000,
-        }));
-        await response.close();
+        });
         return;
       }
 
@@ -338,37 +455,33 @@ class LanSyncService {
 
       if (path == '/api/v1/sync/bundle' || path == '/api/v1/sync/ack') {
         if (sessionId == null || sessionToken == null || claimedPeerId == null) {
-          response.statusCode = HttpStatus.unauthorized;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Unauthorized: Missing session authentication headers'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.unauthorized, {
+            'error': 'Unauthorized: Missing session authentication headers'
+          });
           return;
         }
 
         final session = _activeSessions[sessionId];
         if (session == null || DateTime.now().millisecondsSinceEpoch > (session['expiresAt'] as int)) {
-          response.statusCode = HttpStatus.unauthorized;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Unauthorized: Session not found or expired'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.unauthorized, {
+            'error': 'Unauthorized: Session not found or expired'
+          });
           return;
         }
 
         // Session binding check: claimed peer ID must match paired peer ID
         if (session['peerId'] != claimedPeerId) {
-          response.statusCode = HttpStatus.forbidden;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Forbidden: Claimed peer identity does not match authenticated session binding'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.forbidden, {
+            'error': 'Forbidden: Claimed peer identity does not match authenticated session binding'
+          });
           return;
         }
 
         // Verify session token
         if (session['sessionToken'] != sessionToken) {
-          response.statusCode = HttpStatus.unauthorized;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Unauthorized: Invalid session token'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.unauthorized, {
+            'error': 'Unauthorized: Invalid session token'
+          });
           return;
         }
 
@@ -376,10 +489,9 @@ class LanSyncService {
         if (requestTimestamp != null) {
           final reqTime = DateTime.tryParse(requestTimestamp)?.millisecondsSinceEpoch;
           if (reqTime == null || (DateTime.now().millisecondsSinceEpoch - reqTime).abs() > maxTimestampSkewMs) {
-            response.statusCode = HttpStatus.badRequest;
-            response.headers.contentType = ContentType.json;
-            response.write(json.encode({'error': 'Request timestamp is invalid or exceeds maximum allowable clock skew'}));
-            await response.close();
+            await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+              'error': 'Request timestamp is invalid or exceeds maximum allowable clock skew'
+            });
             return;
           }
         }
@@ -387,10 +499,9 @@ class LanSyncService {
         if (requestNonce != null) {
           final seenNonces = session['seenNonces'] as Set<String>;
           if (seenNonces.contains(requestNonce)) {
-            response.statusCode = HttpStatus.conflict;
-            response.headers.contentType = ContentType.json;
-            response.write(json.encode({'error': 'Conflict: Replayed request nonce detected'}));
-            await response.close();
+            await _safeSendJsonResponse(request, HttpStatus.conflict, {
+              'error': 'Conflict: Replayed request nonce detected'
+            });
             return;
           }
           seenNonces.add(requestNonce);
@@ -404,16 +515,15 @@ class LanSyncService {
       // Route: POST /api/v1/sync/bundle
       // Encrypted in-transit bundle ingestion with strict durable ack semantics
       // -----------------------------------------------------------------
-      if (path == '/api/v1/sync/bundle' && request.method == 'POST') {
+      if (path == '/api/v1/sync/bundle' && method == 'POST') {
         final session = _activeSessions[sessionId!]!;
         final sessionKey = session['sessionKey'] as List<int>;
 
         final encryptedPayload = jsonBody['encrypted_payload'] as Map<String, dynamic>?;
         if (encryptedPayload == null) {
-          response.statusCode = HttpStatus.badRequest;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Encrypted payload required for clinical sync in transit'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+            'error': 'Encrypted payload required for clinical sync in transit'
+          });
           return;
         }
 
@@ -422,20 +532,18 @@ class LanSyncService {
           final decryptedObj = await decryptPayload(encryptedPayload, sessionKey);
           decryptedBundleJson = decryptedObj as Map<String, dynamic>;
         } catch (decErr) {
-          response.statusCode = HttpStatus.badRequest;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Decryption or authentication tag verification failed: $decErr'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+            'error': 'Decryption or authentication tag verification failed: $decErr'
+          });
           return;
         }
 
         final incomingBundle = PeerScribeSyncBundle.fromMap(decryptedBundleJson);
 
         if (incomingBundle.events.length > maxEventsPerBundle) {
-          response.statusCode = HttpStatus.badRequest;
-          response.headers.contentType = ContentType.json;
-          response.write(json.encode({'error': 'Bundle exceeds maximum event limit ($maxEventsPerBundle)'}));
-          await response.close();
+          await _safeSendJsonResponse(request, HttpStatus.badRequest, {
+            'error': 'Bundle exceeds maximum event limit ($maxEventsPerBundle)'
+          });
           return;
         }
 
@@ -512,17 +620,14 @@ class LanSyncService {
         };
         _syncManager.updatePeerCount(_pairedPeers.length);
 
-        response.statusCode = HttpStatus.ok;
-        response.headers.contentType = ContentType.json;
-        response.write(json.encode({
+        await _safeSendJsonResponse(request, HttpStatus.ok, {
           'status': 'SUCCESS',
           'acknowledged_event_ids': acknowledgedEventIds,
           'inserted_count': insertedCount,
           'duplicate_count': duplicateCount,
           'divergences_count': divergencesCount,
           'encrypted_server_bundle': encryptedServerBundle,
-        }));
-        await response.close();
+        });
         return;
       }
 
@@ -530,27 +635,26 @@ class LanSyncService {
       // Route: POST /api/v1/sync/ack
       // Authenticated outbox acknowledgement
       // -----------------------------------------------------------------
-      if (path == '/api/v1/sync/ack' && request.method == 'POST') {
+      if (path == '/api/v1/sync/ack' && method == 'POST') {
         final acked = (jsonBody['acknowledged_event_ids'] as List?)?.cast<String>() ?? [];
         if (acked.isNotEmpty) {
           await _db.acknowledgeOutboxEvents(acked);
         }
-        response.statusCode = HttpStatus.ok;
-        response.headers.contentType = ContentType.json;
-        response.write(json.encode({'success': true, 'acknowledged': acked.length}));
-        await response.close();
+        await _safeSendJsonResponse(request, HttpStatus.ok, {
+          'success': true,
+          'acknowledged': acked.length
+        });
         return;
       }
 
-      response.statusCode = HttpStatus.notFound;
-      response.headers.contentType = ContentType.json;
-      response.write(json.encode({'error': 'Not found: $path'}));
-      await response.close();
-    } catch (err) {
-      response.statusCode = HttpStatus.internalServerError;
-      response.headers.contentType = ContentType.json;
-      response.write(json.encode({'error': err.toString()}));
-      await response.close();
+      await _safeSendJsonResponse(request, HttpStatus.notFound, {
+        'error': 'Not found: $path'
+      });
+    } catch (err, stack) {
+      print('[LanSyncService] Unhandled error in request handler for $path: $err\n$stack');
+      await _safeSendJsonResponse(request, HttpStatus.internalServerError, {
+        'error': err.toString()
+      });
     }
   }
 
@@ -602,7 +706,55 @@ class LanSyncService {
 
       _clientSessions[cleanAddress] = sessionCreds;
       _clientSessions[data['server_node_id'] as String] = sessionCreds;
+
+      // Persist peer credentials into SQLite registry
+      try {
+        final cleanUri = Uri.parse(cleanAddress);
+        await _db.savePeer({
+          'node_id': data['server_node_id'] as String,
+          'device_name': data['server_node_id'] as String,
+          'address': cleanAddress,
+          'port': cleanUri.hasPort ? cleanUri.port : 4322,
+          'medium': 'WIFI',
+          'pairing_status': 'PAIRED',
+          'session_id': data['session_id'] as String,
+          'session_token': base64.encode(derived['sessionToken']!),
+          'session_key_base64': base64.encode(derived['sessionKey']!),
+          'last_seen_utc': DateTime.now().toUtc().toIso8601String(),
+        });
+      } catch (_) {}
+
       return sessionCreds;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Probes a peer address to query discovery info without authenticating.
+  Future<Map<String, dynamic>> probePeer(String peerAddress) async {
+    String cleanAddress = peerAddress.trim();
+    if (!cleanAddress.startsWith('http://') && !cleanAddress.startsWith('https://')) {
+      cleanAddress = 'http://$cleanAddress';
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    try {
+      final uri = Uri.parse('$cleanAddress/api/v1/sync/info');
+      final req = await client.getUrl(uri);
+      final res = await req.close().timeout(const Duration(seconds: 4));
+      final respBody = await utf8.decodeStream(res);
+      if (res.statusCode != HttpStatus.ok) {
+        throw HttpException('HTTP ${res.statusCode}: $respBody');
+      }
+      final data = json.decode(respBody) as Map<String, dynamic>;
+      final isPaired = _clientSessions.containsKey(cleanAddress) ||
+          (data['nodeId'] != null && _clientSessions.containsKey(data['nodeId']));
+      return {
+        ...data,
+        'peerAddress': cleanAddress,
+        'paired': isPaired,
+        'status': isPaired ? 'CONNECTED' : 'PAIRING_REQUIRED',
+      };
     } finally {
       client.close();
     }
@@ -619,6 +771,25 @@ class LanSyncService {
     }
 
     Map<String, dynamic>? session = _clientSessions[cleanAddress];
+    if (session == null) {
+      // Check SQLite for persisted paired session
+      try {
+        final stored = await _db.getPeer(cleanAddress);
+        if (stored != null && stored['session_key_base64'] != null) {
+          session = {
+            'sessionId': stored['session_id'] as String,
+            'sessionToken': stored['session_token'] as String,
+            'sessionKey': base64.decode(stored['session_key_base64'] as String),
+            'serverNodeId': stored['node_id'] as String,
+            'peerAddress': cleanAddress,
+            'pairedAt': DateTime.now().millisecondsSinceEpoch,
+          };
+          _clientSessions[cleanAddress] = session;
+          _clientSessions[stored['node_id'] as String] = session;
+        }
+      } catch (_) {}
+    }
+
     if (session == null) {
       if (pairingPin == null || pairingPin.isEmpty) {
         return LanSyncResult(
