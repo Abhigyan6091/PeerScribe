@@ -30,7 +30,7 @@ class TacticalTheme {
         surface: surface,
         error: triageRed,
       ),
-      cardTheme: const CardTheme(
+      cardTheme: const CardThemeData(
         color: surface,
         elevation: 0,
         shape: RoundedRectangleBorder(

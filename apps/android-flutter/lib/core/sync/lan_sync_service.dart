@@ -10,6 +10,8 @@ import '../protocol/event_model.dart';
 import '../protocol/sync_bundle.dart';
 import '../storage/database_helper.dart';
 import 'sync_manager.dart';
+import 'mdns_discovery_service.dart';
+import 'ble_mesh_service.dart';
 
 const int defaultTacticalMobilePort = 4322;
 const int maxRequestSizeBytes = 2 * 1024 * 1024; // 2 MB limit
@@ -755,6 +757,36 @@ class LanSyncService {
       response.headers.contentType = ContentType.json;
       response.write(json.encode({'error': e.toString()}));
       await response.close();
+    }
+  }
+
+  /// Probes a peer address to query discovery info without authenticating.
+  Future<Map<String, dynamic>> probePeer(String peerAddress) async {
+    String cleanAddress = peerAddress.trim();
+    if (!cleanAddress.startsWith('http://') && !cleanAddress.startsWith('https://')) {
+      cleanAddress = 'http://$cleanAddress';
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    try {
+      final uri = Uri.parse('$cleanAddress/api/v1/sync/info');
+      final req = await client.getUrl(uri);
+      final res = await req.close().timeout(const Duration(seconds: 4));
+      final respBody = await utf8.decodeStream(res);
+      if (res.statusCode != HttpStatus.ok) {
+        throw HttpException('HTTP ${res.statusCode}: $respBody');
+      }
+      final data = json.decode(respBody) as Map<String, dynamic>;
+      final isPaired = _clientSessions.containsKey(cleanAddress) ||
+          (data['nodeId'] != null && _clientSessions.containsKey(data['nodeId']));
+      return {
+        ...data,
+        'peerAddress': cleanAddress,
+        'paired': isPaired,
+        'status': isPaired ? 'CONNECTED' : 'PAIRING_REQUIRED',
+      };
+    } finally {
+      client.close();
     }
   }
 

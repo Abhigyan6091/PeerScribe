@@ -28,6 +28,7 @@ export interface SearchAreaEstimates {
   radius90PercentMeters: number;
   particleCount: number;
   elapsedSeconds: number;
+  sampleParticles?: Array<{ lat: number; lon: number; weight: number }>;
 }
 
 /**
@@ -175,7 +176,8 @@ export class MobilityParticleFilter {
       radius75PercentMeters: distances[idx75],
       radius90PercentMeters: distances[idx90],
       particleCount: this.particles.length,
-      elapsedSeconds: this.totalElapsedSeconds
+      elapsedSeconds: this.totalElapsedSeconds,
+      sampleParticles: this.particles.slice(0, 80).map(p => ({ lat: p.lat, lon: p.lon, weight: p.weight }))
     };
   }
 }

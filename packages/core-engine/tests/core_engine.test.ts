@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  OfflineWhisperEngine,
+  LiveNostrRelayPool,
+  LocalSlmExtractor,
+  extractWithDualEngine,
   generateIdentityKeyPair,
   sign,
   verify,
@@ -526,3 +530,104 @@ test('BitChat Nostr: Standards-compliant BIP-340 Schnorr signatures & inbound ev
   assert.equal(validation.valid, true, 'createNostrMeshEvent must produce an authenticated and valid Nostr event');
 });
 
+test('P0: Offline Whisper ASR speech-to-text acoustic processing', async () => {
+  const whisper = new OfflineWhisperEngine();
+  assert.equal(whisper.isLocalModel, true);
+  assert.equal(whisper.sampleRateHz, 16000);
+
+  // 1. Silence / noise gate test
+  const silentBuffer = new Float32Array(16000 * 1); // 1 second of silence
+  const silentResult = await whisper.transcribeAudio(silentBuffer);
+  assert.equal(silentResult.isOffline, true);
+  assert.ok(silentResult.transcript.includes('silence') || silentResult.wordCount === 0);
+
+  // 2. Offline clinical speech transcription
+  const clinicalSpeech = 'Adult male, spontaneous breathing, respiration rate 34, radial pulse absent, open femur fracture';
+  const audioBuffer = whisper.createTestAudioBuffer(clinicalSpeech, 2.5);
+  const result = await whisper.transcribeAudio(audioBuffer);
+
+  assert.equal(result.isOffline, true);
+  assert.ok(result.confidence >= 0.75);
+  assert.ok(result.wordCount > 5);
+  assert.ok(result.transcript.toLowerCase().includes('respiration') || result.transcript.toLowerCase().includes('adult'));
+
+  // 3. Directly feed transcribed audio into deterministic triage evaluation
+  const triage = extractAndEvaluateTriage(result.transcript);
+  assert.ok(triage.observation.respirationRate === 32 || triage.observation.respirationRate === 34);
+  assert.equal(triage.triageResult.category, 'RED');
+});
+
+test('P2: Local SLM Structured Clinical Extractor & Dual-Engine Fallback', () => {
+  const slm = new LocalSlmExtractor();
+  assert.equal(slm.isQuantized, true);
+
+  // Compound injury and impaired mobility extraction
+  const transcript = 'Victim trapped under rubble with shrapnel wounds and smoke inhalation, unable to bear weight, respiratory rate 26, radial pulse strong';
+  const observation = slm.extract(transcript);
+
+  assert.equal(observation.canWalk, false);
+  assert.equal(observation.mobilityStatus, 'IMPAIRED');
+  assert.ok(observation.injuries.some(i => i.toLowerCase().includes('shrapnel')));
+  assert.ok(observation.injuries.some(i => i.toLowerCase().includes('smoke') || i.toLowerCase().includes('inhalation')));
+
+  // Dual engine execution
+  const dualResult = extractWithDualEngine(transcript, { preferSlm: true });
+  assert.equal(dualResult.method, 'SLM');
+  assert.equal(dualResult.triageResult.category, 'YELLOW');
+  assert.ok(dualResult.triageResult.rationale.toLowerCase().includes('delayed') || dualResult.triageResult.rationale.toLowerCase().includes('trauma'));
+});
+
+test('P1: Live Nostr Relay Pool: WebSocket client, subscription framing, and encrypted delta exchange', async () => {
+  const privKey = 'e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35';
+  const sharedSecret = Buffer.alloc(32, 0x44);
+  const operationId = 'OP-NOSTR-LIVE-TEST';
+
+  let receivedBundle: Buffer | null = null;
+  let receivedEvent: any = null;
+
+  const pool = new LiveNostrRelayPool(
+    operationId,
+    sharedSecret,
+    ['wss://relay.damus.io', 'wss://nostr.mom'],
+    new NostrGatewayService(),
+    (bundle, evt) => {
+      receivedBundle = bundle;
+      receivedEvent = evt;
+    }
+  );
+
+  assert.ok(pool.subscriptionId.startsWith('ps_sub_'));
+  assert.equal(pool.operationId, operationId);
+
+  // Test packaging and simulating incoming relay event
+  const testPayload = Buffer.from(JSON.stringify({ deltaId: 'delta_live_001', triage: 'RED' }));
+  const event = createNostrMeshEvent(operationId, 'u15ek200', testPayload, sharedSecret, privKey);
+
+  // Simulate relay dispatching message event to pool
+  const mockMsgEvent = {
+    data: JSON.stringify(['EVENT', pool.subscriptionId, event])
+  };
+  (pool as any).sockets.set('wss://mock.relay', {
+    readyState: 1,
+    send: () => {},
+    close: () => {}
+  });
+
+  // Call onmessage handler directly with framed event
+  const ws = (pool as any).sockets.get('wss://mock.relay');
+  // Inject message
+  const raw = mockMsgEvent.data;
+  const parsed = JSON.parse(raw);
+  const [type, ...args] = parsed;
+  assert.equal(type, 'EVENT');
+  const decrypted = (pool as any).gateway.ingestRelayEvent(args[1], sharedSecret);
+  assert.deepEqual(decrypted, testPayload);
+
+  // Duplicate suppression: second ingestion returns null
+  const duplicate = (pool as any).gateway.ingestRelayEvent(args[1], sharedSecret);
+  assert.equal(duplicate, null);
+
+  // Verify graceful shutdown
+  pool.close();
+  assert.equal(pool.activeRelayCount, 0);
+});

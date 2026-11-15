@@ -161,6 +161,30 @@ export function recordVitals(
   nodeId: string,
   vitalsData: Omit<VitalSignEntry, 'id' | 'timestamp' | 'recordedByNode'>
 ): { updatedDoc: CrdtPatientDocument; delta: CrdtDelta } {
+  if (doc.vitals && doc.vitals.length > 0) {
+    const last = doc.vitals[doc.vitals.length - 1];
+    const isSameNode = last.recordedByNode === nodeId;
+    const isWithinWindow = (Date.now() - last.timestamp) < 5000;
+    const isSameVitals =
+      last.respirationRate === vitalsData.respirationRate &&
+      last.heartRate === vitalsData.heartRate &&
+      last.radialPulsePresent === vitalsData.radialPulsePresent &&
+      last.mentalStatus === vitalsData.mentalStatus &&
+      last.systolicBp === vitalsData.systolicBp &&
+      last.capillaryRefillSeconds === vitalsData.capillaryRefillSeconds;
+    if (isSameNode && isWithinWindow && isSameVitals) {
+      const delta: CrdtDelta = {
+        deltaId: `delta_${sha256(`${last.id}:${last.timestamp}`).substring(0, 12)}`,
+        patientId: doc.patientId,
+        operationId: doc.operationId,
+        originNode: nodeId,
+        vectorClock: doc.vectorClock,
+        timestamp: last.timestamp,
+        mutations: [{ vital: last }]
+      };
+      return { updatedDoc: doc, delta };
+    }
+  }
   const updatedClock = incrementClock(doc.vectorClock, nodeId);
   const entry: VitalSignEntry = {
     id: `vit_${sha256(`${doc.patientId}:${nodeId}:${Date.now()}`).substring(0, 12)}`,

@@ -273,3 +273,155 @@ test('Backend Service Daemon: Emergency Snapshot Attachment & Drug Allergy Diver
   const dtnBundles = daemon.db.listPendingDtnBundles(daemon.currentOperationId);
   assert.ok(dtnBundles.length >= 2);
 });
+
+test('Backend Service Daemon: RBAC Capability Enforcement & Operation Lifecycle Management', async () => {
+  const daemon = new PeerScribeDaemon({ initialRole: 'COORDINATOR' });
+  const server = createPeerScribeServer(daemon);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const port = (server.address() as any).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    // 1. Verify Coordinator capabilities for operation management
+    const createOpRes = await fetch(`${baseUrl}/api/v1/operations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operationId: 'OP_FLOOD_RELIEF_2026',
+        name: 'Operation River Shield',
+        sectorGeohash: 'u15ek999'
+      })
+    });
+    assert.strictEqual(createOpRes.status, 201);
+
+    // Switch operation
+    const switchRes = await fetch(`${baseUrl}/api/v1/operations/OP_FLOOD_RELIEF_2026/switch`, {
+      method: 'POST'
+    });
+    assert.strictEqual(switchRes.status, 200);
+    assert.strictEqual(daemon.currentOperationId, 'OP_FLOOD_RELIEF_2026');
+
+    // Create a patient in this operation
+    const patientDoc = daemon.createPatient();
+
+    // 2. Switch role to PARTICIPANT (General Civilian / Unverified Actor)
+    const roleRes = await fetch(`${baseUrl}/api/v1/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'PARTICIPANT' })
+    });
+    assert.strictEqual(roleRes.status, 200);
+    assert.strictEqual(daemon.currentRole, 'PARTICIPANT');
+
+    // 3. Unauthorized Triage Override Attempt by Participant -> MUST RETURN 403 FORBIDDEN
+    const unauthTriageRes = await fetch(`${baseUrl}/api/v1/patients/${patientDoc.patientId}/triage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'RED', overrideReason: 'Participant trying to override' })
+    });
+    assert.strictEqual(unauthTriageRes.status, 403, 'Participant role must be rejected from overriding triage');
+    const unauthData = await unauthTriageRes.json();
+    assert.strictEqual(unauthData.authorizationFailed, true);
+
+    // Verify audit trail logged the AUTHORIZATION_FAILED event
+    const auditEvents = daemon.db.getAuditTrail(patientDoc.patientId);
+    assert.ok(auditEvents.some((e: any) => e.action_type === 'AUTHORIZATION_FAILED'));
+
+    // 4. Switch role back to MEDICAL_RESPONDER -> Now triage succeeds
+    await fetch(`${baseUrl}/api/v1/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'MEDICAL_RESPONDER' })
+    });
+    assert.strictEqual(daemon.currentRole, 'MEDICAL_RESPONDER');
+
+    const authTriageRes = await fetch(`${baseUrl}/api/v1/patients/${patientDoc.patientId}/triage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'YELLOW' })
+    });
+    assert.strictEqual(authTriageRes.status, 200);
+
+    // 5. Operation finalization & archiving (Requires COORDINATOR)
+    await fetch(`${baseUrl}/api/v1/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'COORDINATOR' })
+    });
+
+    const finalizeRes = await fetch(`${baseUrl}/api/v1/operations/OP_FLOOD_RELIEF_2026/finalize`, {
+      method: 'POST'
+    });
+    assert.strictEqual(finalizeRes.status, 200);
+
+    const archiveRes = await fetch(`${baseUrl}/api/v1/operations/OP_FLOOD_RELIEF_2026/archive`, {
+      method: 'POST'
+    });
+    assert.strictEqual(archiveRes.status, 200);
+    const archiveData = await archiveRes.json();
+    assert.strictEqual(archiveData.success, true);
+    assert.ok(archiveData.archiveInfo.archiveDigest);
+  } finally {
+    server.close();
+    daemon.db.close();
+  }
+});
+
+test('Backend Service Daemon: Offline Whisper Audio Intake via HTTP API', async () => {
+  const testDb = `:memory:`;
+  const daemon = new PeerScribeDaemon({
+    dbPath: testDb,
+    nodeId: 'node_whisper_test',
+    operationId: 'OP_WHISPER_AUDIO',
+    initialMode: 'FIELD',
+    initialRole: 'MEDICAL_RESPONDER'
+  });
+  const server = createPeerScribeServer(daemon);
+  const port = 4920;
+  await server.listen(port);
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    // 1. Create a patient to receive audio triage
+    const patientDoc = daemon.createPatient();
+
+    // 2. Synthesize audio buffer with clinical speech
+    const whisperEngine = new (daemon as any).whisperEngine.constructor();
+    const speech = 'Adult male, spontaneous breathing, respiration rate 36, absent radial pulse, altered mental status';
+    const audioSamples = whisperEngine.createTestAudioBuffer(speech, 2.0);
+    
+    // Convert Float32Array to 16-bit PCM Buffer
+    const pcmBuf = Buffer.alloc(audioSamples.length * 2);
+    for (let i = 0; i < audioSamples.length; i++) {
+      const s = Math.max(-1, Math.min(1, audioSamples[i]));
+      pcmBuf.writeInt16LE(Math.floor(s < 0 ? s * 0x8000 : s * 0x7FFF), i * 2);
+    }
+
+    // 3. Post audio as base64 JSON payload
+    const res = await fetch(`${baseUrl}/api/v1/ai/transcribe-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audioBase64: pcmBuf.toString('base64'),
+        patientId: patientDoc.patientId
+      })
+    });
+
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.ok(data.whisper);
+    assert.strictEqual(data.whisper.isOffline, true);
+    assert.ok(data.whisper.confidence >= 0.75);
+    assert.ok(data.triageResult);
+    assert.strictEqual(data.triageResult.category, 'RED');
+
+    // 4. Verify patient document in database was updated with RED triage
+    const updated = daemon.db.getPatientDocument(patientDoc.patientId);
+    assert.ok(updated);
+    const triageEntries = updated.triageEvaluations || [];
+    assert.ok(triageEntries.some((t: any) => t.category === 'RED'));
+  } finally {
+    server.close();
+    daemon.db.close();
+  }
+});
