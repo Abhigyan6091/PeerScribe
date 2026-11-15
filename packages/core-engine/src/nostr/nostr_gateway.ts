@@ -315,7 +315,8 @@ export function decryptNostrMeshEvent(event: NostrEvent, sharedSecret: Buffer): 
  * and handles encrypted relay synchronization.
  */
 export class NostrGatewayService {
-  public readonly isExperimental = true;
+  public readonly isExperimental = false;
+  public readonly isProductionReady = true;
   public isGatewayActive = false;
   private knownEventIds = new Set<string>();
   private maxBoundedEvents = 1000;

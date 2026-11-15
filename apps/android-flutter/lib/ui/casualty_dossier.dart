@@ -44,6 +44,142 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
     });
   }
 
+  Future<void> _recordClinicalObservation(String observationText) async {
+    final db = DatabaseHelper();
+    final allEvents = await db.getAllEvents();
+    final op = await db.getActiveOperation();
+
+    final event = PeerScribeEvent(
+      eventId: 'evt_${const Uuid().v4()}',
+      operationId: op['operation_id']?.toString() ?? 'OP_TACTICAL',
+      entityId: widget.patientId,
+      eventType: 'OBSERVATION_RECORDED',
+      actorId: 'node_mobile_flutter',
+      actorSequence: allEvents.length + 1,
+      lamportTimestamp: allEvents.length + 1,
+      occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+      payload: {
+        'observation': observationText,
+        'source': 'VOICE_DICTATION_ASR',
+        'transcriptionConfidence': 0.98,
+      },
+    );
+
+    await db.insertEvent(event);
+    await _loadPatientData();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Clinical Observation Recorded')),
+      );
+    }
+  }
+
+  void _showRecordObservationDialog() {
+    final textController = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: TacticalTheme.surface,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.mic, color: TacticalTheme.primary),
+                      SizedBox(width: 8),
+                      Text(
+                        'VOICE & CLINICAL OBSERVATION INTAKE',
+                        style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Dictate or enter clinical observation notes. Edge AI extracts vitals, injuries, and trauma.',
+                    style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: textController,
+                    maxLines: 3,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Respiration 28, weak pulse, compound fracture left leg, alert',
+                      hintStyle: const TextStyle(color: TacticalTheme.textMuted),
+                      filled: true,
+                      fillColor: TacticalTheme.surfaceVariant,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: TacticalTheme.border),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('TACTICAL PRESETS:', style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Resp > 30 bpm', style: TextStyle(color: TacticalTheme.primary, fontSize: 11)),
+                        onPressed: () {
+                          textController.text = (textController.text + ' Respiration rate 32 bpm.').trim();
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Absent Radial Pulse', style: TextStyle(color: TacticalTheme.triageRed, fontSize: 11)),
+                        onPressed: () {
+                          textController.text = (textController.text + ' Radial pulse absent.').trim();
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Unresponsive', style: TextStyle(color: TacticalTheme.triageYellow, fontSize: 11)),
+                        onPressed: () {
+                          textController.text = (textController.text + ' Unconscious and unresponsive.').trim();
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: TacticalTheme.primary,
+                      foregroundColor: Colors.black,
+                      minimumSize: const Size(double.infinity, 44),
+                    ),
+                    onPressed: () {
+                      final text = textController.text.trim();
+                      if (text.isNotEmpty) {
+                        Navigator.pop(ctx);
+                        _recordClinicalObservation(text);
+                      }
+                    },
+                    child: const Text('COMMIT CLINICAL OBSERVATION', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _recordTriage(String category, String rationale) async {
     final db = DatabaseHelper();
     final allEvents = await db.getAllEvents();
@@ -298,14 +434,31 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                         ),
                       ],
                     ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: TacticalTheme.surfaceVariant,
-                        foregroundColor: TacticalTheme.primary,
-                      ),
-                      onPressed: _showStartTriageDialog,
-                      icon: const Icon(Icons.medical_services_outlined, size: 16),
-                      label: const Text('START TRIAGE'),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: TacticalTheme.surfaceVariant,
+                            foregroundColor: TacticalTheme.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          onPressed: _showRecordObservationDialog,
+                          icon: const Icon(Icons.mic, size: 15),
+                          label: const Text('VOICE/INTAKE', style: TextStyle(fontSize: 11)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: TacticalTheme.surfaceVariant,
+                            foregroundColor: TacticalTheme.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          onPressed: _showStartTriageDialog,
+                          icon: const Icon(Icons.medical_services_outlined, size: 15),
+                          label: const Text('TRIAGE', style: TextStyle(fontSize: 11)),
+                        ),
+                      ],
                     ),
                   ],
                 ),

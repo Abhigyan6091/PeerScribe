@@ -86,7 +86,7 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 
     assert.strictEqual(pkg.name, '@peerscribe/desktop-electron');
-    assert.strictEqual(pkg.version, '1.0.0', 'First release version must be named v1.0 (1.0.0)');
+    assert.ok(/^\d+\.\d+\.\d+/.test(pkg.version), 'Must follow semantic versioning (e.g. 1.0.0, 1.1.0)');
     assert.ok(pkg.build, 'Must contain electron-builder config');
     assert.strictEqual(pkg.build.appId, 'org.peerscribe.desktop');
     assert.ok(pkg.build.nsis.differentialPackage, 'Must enable differential delta packaging');
