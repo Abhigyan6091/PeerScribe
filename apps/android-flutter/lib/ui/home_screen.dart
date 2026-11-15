@@ -735,6 +735,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               title: Row(
                                 children: [
                                   Text(p.ephemeralId, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  if (p.photos.isNotEmpty) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(Icons.photo_camera, size: 14, color: TacticalTheme.primary),
+                                  ],
                                   if (hasDiv) ...[
                                     const SizedBox(width: 8),
                                     Container(

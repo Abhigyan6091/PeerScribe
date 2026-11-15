@@ -31,6 +31,11 @@ import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -41,12 +46,14 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL = "com.peerscribe.mesh/ble"
         private const val LOCATION_CHANNEL = "com.peerscribe.mesh/location"
         private const val WHISPER_CHANNEL = "com.peerscribe.mesh/whisper"
+        private const val CAMERA_CHANNEL = "com.peerscribe.mesh/camera"
         private val CHARACTERISTIC_UUID: UUID = UUID.fromString("00005054-0000-1000-8000-00805F9B34FB")
     }
 
     private var methodChannel: MethodChannel? = null
     private var locationChannel: MethodChannel? = null
     private var whisperChannel: MethodChannel? = null
+    private var cameraChannel: MethodChannel? = null
 
     private var bluetoothManager: BluetoothManager? = null
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -155,6 +162,47 @@ class MainActivity : FlutterActivity() {
                         "isOffline" to true,
                         "model" to "whisper-tiny-quantized-int8"
                     ))
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Tactical Camera & Binary Photo Sync Channel
+        cameraChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CAMERA_CHANNEL)
+        cameraChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isCameraAvailable" -> {
+                    val hasCam = packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+                    result.success(hasCam)
+                }
+                "capturePhoto" -> {
+                    val photoType = call.argument<String>("photoType") ?: "WOUND"
+                    val caption = call.argument<String>("caption") ?: ""
+                    val photoMap = generateTacticalPhoto(photoType, caption)
+                    result.success(photoMap)
+                }
+                "compressJpeg" -> {
+                    val rawBytes = call.argument<ByteArray>("rawBytes")
+                    val quality = call.argument<Int>("quality") ?: 70
+                    if (rawBytes == null || rawBytes.isEmpty()) {
+                        result.error("INVALID_BYTES", "Raw image bytes required", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val bmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                        val stream = ByteArrayOutputStream()
+                        bmp.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+                        val compressedBytes = stream.toByteArray()
+                        val b64 = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
+                        result.success(mapOf(
+                            "image_base64" to b64,
+                            "file_size_bytes" to compressedBytes.size,
+                            "width" to bmp.width,
+                            "height" to bmp.height
+                        ))
+                    } catch (e: Exception) {
+                        result.error("COMPRESSION_ERROR", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -562,6 +610,71 @@ class MainActivity : FlutterActivity() {
             return "[silence / ambient background noise]"
         }
         return "Adult casualty, respiratory rate 28 breaths per minute, weak radial pulse, open compound fracture left femur, alert and responsive."
+    }
+
+    private fun generateTacticalPhoto(photoType: String, caption: String): Map<String, Any> {
+        val width = 640
+        val height = 480
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+        val canvas = android.graphics.Canvas(bmp)
+        val paint = android.graphics.Paint()
+
+        // Background tactical dark surface
+        paint.color = android.graphics.Color.rgb(18, 24, 38)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+        // Draw trauma / wound simulation markers based on photoType
+        when (photoType.uppercase()) {
+            "WOUND", "TRAUMA" -> {
+                // High-contrast crimson trauma center
+                paint.color = android.graphics.Color.rgb(200, 30, 30)
+                canvas.drawCircle(320f, 240f, 80f, paint)
+                paint.color = android.graphics.Color.rgb(140, 10, 10)
+                canvas.drawCircle(320f, 240f, 40f, paint)
+            }
+            "BURN" -> {
+                // Thermal amber/orange zone
+                paint.color = android.graphics.Color.rgb(220, 110, 20)
+                canvas.drawCircle(320f, 240f, 90f, paint)
+                paint.color = android.graphics.Color.rgb(240, 160, 40)
+                canvas.drawCircle(320f, 240f, 50f, paint)
+            }
+            else -> {
+                // General casualty identification thumbnail
+                paint.color = android.graphics.Color.rgb(0, 229, 255)
+                canvas.drawCircle(320f, 200f, 60f, paint)
+                paint.color = android.graphics.Color.rgb(0, 145, 234)
+                canvas.drawRect(240f, 280f, 400f, 420f, paint)
+            }
+        }
+
+        val stream = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+        val jpegBytes = stream.toByteArray()
+        val b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+        // Compute SHA-256
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(jpegBytes)
+        val hash = digest.joinToString("") { "%02x".format(it) }
+
+        val photoId = "photo_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        val finalCaption = if (caption.isNotBlank()) caption else "Tactical $photoType clinical documentation"
+
+        return mapOf(
+            "photo_id" to photoId,
+            "photo_type" to photoType,
+            "caption" to finalCaption,
+            "mime_type" to "image/jpeg",
+            "width" to width,
+            "height" to height,
+            "file_size_bytes" to jpegBytes.size,
+            "sha256_checksum" to hash,
+            "image_base64" to b64,
+            "captured_at_utc" to java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(java.util.Date())
+        )
     }
 
     override fun onDestroy() {

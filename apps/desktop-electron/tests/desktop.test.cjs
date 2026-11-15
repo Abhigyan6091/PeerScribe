@@ -759,6 +759,46 @@ describe('PeerScribe Windows Electron Desktop Engine', () => {
       assert.ok(clientAcked.includes('evt_already_durable'), 'Existing duplicate must be acknowledged');
       assert.strictEqual(hostEvents.length, 1, 'Duplicate event must NOT be inserted twice');
     });
+
+    it('synchronizes and durably persists PHOTO_ATTACHED events with binary base64 JPEG attachments over authenticated AES-256-GCM session', async () => {
+      const photoEvt = {
+        schema_version: 1,
+        event_id: 'evt_photo_sync_101',
+        operation_id: 'OP_ACK',
+        entity_id: 'pt_photo_casualty_01',
+        event_type: 'PHOTO_ATTACHED',
+        actor_id: client.nodeId,
+        actor_sequence: 1,
+        lamport_timestamp: 1,
+        occurred_at_utc: new Date().toISOString(),
+        payload: {
+          photo_id: 'photo_femur_01',
+          photo_type: 'WOUND',
+          caption: 'Compound fracture left leg with controlled bleeding',
+          mime_type: 'image/jpeg',
+          file_size_bytes: 34120,
+          sha256_checksum: '4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b',
+          image_base64: Buffer.from('FAKE_JPEG_BINARY_DATA_FOR_TESTING').toString('base64')
+        }
+      };
+
+      client.getState = () => ({
+        eventsLog: [],
+        outboxQueue: [photoEvt],
+        activeOperation: { operation_id: 'OP_ACK' }
+      });
+
+      let clientAcked = [];
+      client.onOutboxAcknowledged = (ids) => { clientAcked = ids; };
+
+      const syncRes = await client.syncWithPeer(`http://127.0.0.1:${hostPort}`, pin);
+      assert.strictEqual(syncRes.success, true);
+      assert.ok(clientAcked.includes('evt_photo_sync_101'), 'PHOTO_ATTACHED event must be acknowledged by host');
+      assert.strictEqual(hostEvents.length, 1);
+      assert.strictEqual(hostEvents[0].event_type, 'PHOTO_ATTACHED');
+      assert.strictEqual(hostEvents[0].payload.photo_type, 'WOUND');
+      assert.strictEqual(hostEvents[0].payload.file_size_bytes, 34120);
+    });
   });
 
   // --------------------------------------------------------------------------

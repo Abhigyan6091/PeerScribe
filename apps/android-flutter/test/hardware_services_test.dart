@@ -9,6 +9,8 @@ import 'package:peerscribe_mobile/core/sync/wifi_p2p_service.dart';
 import 'package:peerscribe_mobile/core/location/gps_service.dart';
 import 'package:peerscribe_mobile/core/location/particle_filter_service.dart';
 import 'package:peerscribe_mobile/core/ai/offline_whisper_service.dart';
+import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
+import 'package:peerscribe_mobile/core/media/camera_photo_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -233,6 +235,85 @@ void main() {
 
       expect(result.isOffline, isTrue);
       expect(result.transcript, contains('silence / ambient background noise'));
+    });
+  });
+
+  group('Camera / Photo Capture & Binary Image Sync Tests', () {
+    test('CameraPhotoService generates valid standard JPEG binary image buffers with JFIF markers', () async {
+      final camera = CameraPhotoService();
+
+      final photo = await camera.captureOrSynthesizePhoto(
+        photoType: 'WOUND',
+        preset: 'WOUND_FEMUR',
+      );
+
+      expect(photo.photoType, 'WOUND');
+      expect(photo.mimeType, 'image/jpeg');
+      expect(photo.rawBytes.length, greaterThan(100));
+      expect(photo.fileSizeBytes, photo.rawBytes.length);
+      expect(photo.imageBase64.isNotEmpty, isTrue);
+      expect(photo.sha256Checksum.length, 64);
+
+      // Verify JPEG SOI (FF D8) and EOI (FF D9) markers
+      expect(photo.rawBytes[0], 0xFF);
+      expect(photo.rawBytes[1], 0xD8);
+      expect(photo.rawBytes[photo.rawBytes.length - 2], 0xFF);
+      expect(photo.rawBytes[photo.rawBytes.length - 1], 0xD9);
+    });
+
+    test('CameraPhotoService attaches photo event durably into SQLite WAL and projects correctly', () async {
+      final camera = CameraPhotoService();
+
+      // 1. Create base patient
+      final ptCreated = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_pt_photo_test',
+        operationId: 'OP_TEST',
+        entityId: 'pt_photo_001',
+        eventType: 'PATIENT_CREATED',
+        actorId: 'medic_1',
+        actorRole: 'MEDICAL_RESPONDER',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'ephemeral_id': 'PHOTO-EAGLE-99'},
+      );
+      await dbHelper.recordEvent(ptCreated);
+
+      // 2. Capture and attach photo
+      final capture = await camera.captureOrSynthesizePhoto(
+        photoType: 'BURN',
+        caption: 'Forearm second-degree thermal burns',
+        preset: 'TRAUMA_BURN',
+      );
+
+      final photoEvt = await camera.attachPhotoToCasualty(
+        patientId: 'pt_photo_001',
+        operationId: 'OP_TEST',
+        actorId: 'medic_1',
+        actorRole: 'MEDICAL_RESPONDER',
+        photo: capture,
+      );
+
+      expect(photoEvt.eventType, 'PHOTO_ATTACHED');
+      expect(photoEvt.entityId, 'pt_photo_001');
+
+      // 3. Verify SQLite durability
+      final eventsInDb = await dbHelper.getEventsForEntity('pt_photo_001');
+      expect(eventsInDb.length, 2);
+      expect(eventsInDb.any((e) => e.eventType == 'PHOTO_ATTACHED'), isTrue);
+
+      // Verify Outbox enqueuing for mesh synchronization
+      final outboxItems = await dbHelper.getQueuedOutboxEvents();
+      expect(outboxItems.any((e) => e.eventId == photoEvt.eventId), isTrue);
+
+      // 4. Verify ProjectedPatient state
+      final projected = ProjectedPatient.project(eventsInDb);
+      expect(projected, isNotNull);
+      expect(projected!.photos.length, 1);
+      expect(projected.photos.first['photo_type'], 'BURN');
+      expect(projected.photos.first['caption'], 'Forearm second-degree thermal burns');
+      expect(projected.photos.first['file_size_bytes'], greaterThan(0));
     });
   });
 }

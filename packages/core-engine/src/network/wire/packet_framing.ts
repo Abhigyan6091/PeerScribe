@@ -7,7 +7,8 @@ export const PacketType = {
   CRDT_SYNC_BUNDLE: 0x01,
   BEACON_HEARTBEAT: 0x02,
   SOS_PRIORITY: 0x03,
-  EMERGENCY_WIPE_CMD: 0x04
+  EMERGENCY_WIPE_CMD: 0x04,
+  BINARY_ATTACHMENT: 0x05
 } as const;
 export type PacketType = typeof PacketType[keyof typeof PacketType];
 

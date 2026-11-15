@@ -17,6 +17,7 @@ class ProjectedPatient {
   final List<Map<String, dynamic>> medications;
   final List<String> knownAllergies;
   final List<Map<String, dynamic>> notes;
+  final List<Map<String, dynamic>> photos;
   final List<Map<String, dynamic>> divergenceFlags;
   final List<Map<String, dynamic>> authorizationFailures;
 
@@ -37,6 +38,7 @@ class ProjectedPatient {
     required this.medications,
     required this.knownAllergies,
     required this.notes,
+    this.photos = const [],
     required this.divergenceFlags,
     this.authorizationFailures = const [],
   });
@@ -77,6 +79,7 @@ class ProjectedPatient {
       medications: [],
       knownAllergies: [],
       notes: [],
+      photos: [],
       divergenceFlags: [],
       authorizationFailures: [],
     );
@@ -125,6 +128,20 @@ class ProjectedPatient {
             'event_id': evt.eventId,
             'timestamp': evt.occurredAtUtc,
             'text': '[EMERGENCY ID] Blood: ${evt.payload['blood_group']} | Allergies: ${(evt.payload['allergies'] as List?)?.join(', ') ?? 'None'}'
+          });
+          break;
+        case 'PHOTO_ATTACHED':
+          patient.photos.add({
+            'event_id': evt.eventId,
+            'photo_id': evt.payload['photo_id'] ?? evt.eventId,
+            'photo_type': evt.payload['photo_type'] ?? 'WOUND',
+            'caption': evt.payload['caption'] ?? '',
+            'mime_type': evt.payload['mime_type'] ?? 'image/jpeg',
+            'image_base64': evt.payload['image_base64'] ?? '',
+            'file_size_bytes': evt.payload['file_size_bytes'] ?? 0,
+            'sha256_checksum': evt.payload['sha256_checksum'] ?? '',
+            'timestamp': evt.occurredAtUtc,
+            'actor_id': evt.actorId,
           });
           break;
         case 'TRIAGE_STATUS_CHANGED':

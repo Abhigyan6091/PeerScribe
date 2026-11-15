@@ -51,6 +51,7 @@ const Map<String, List<String>> roleCapabilities = {
 
 const Map<String, String> eventRequiredCapabilities = {
   'OBSERVATION_RECORDED': 'RECORD_OBSERVATION',
+  'PHOTO_ATTACHED': 'RECORD_OBSERVATION',
   'VITALS_RECORDED': 'RECORD_VITALS',
   'INJURY_RECORDED': 'RECORD_INJURY',
   'TRIAGE_STATUS_CHANGED': 'OVERRIDE_TRIAGE',

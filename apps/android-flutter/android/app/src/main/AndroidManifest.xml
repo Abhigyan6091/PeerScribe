@@ -23,6 +23,11 @@
     <!-- Voice Intake (Prompted only when responder presses mic intake) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Tactical Camera & Clinical Wound Imagery Capture -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <application
         android:label="PeerScribe"
         android:name="${applicationName}"

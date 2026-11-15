@@ -317,4 +317,51 @@ describe('PeerScribe Shared Protocol Specification', () => {
     const res5 = validateEvent(participantObsEvt);
     assert.strictEqual(res5.valid, true, 'Participant is permitted to record observations');
   });
+
+  it('validates and projects PHOTO_ATTACHED events with binary metadata and thumbnails', () => {
+    const photoEvt: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_photo_01',
+      operation_id: 'OP_TEST',
+      entity_id: 'pt_test_photo',
+      event_type: 'PHOTO_ATTACHED',
+      actor_id: 'node_medic_01',
+      actor_role: 'MEDICAL_RESPONDER',
+      actor_sequence: 2,
+      lamport_timestamp: 5,
+      occurred_at_utc: new Date().toISOString(),
+      payload: {
+        photo_id: 'photo_101',
+        photo_type: 'WOUND',
+        caption: 'Compound left femur fracture with bleeding controlled',
+        mime_type: 'image/jpeg',
+        file_size_bytes: 45210,
+        sha256_checksum: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        image_base64: '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP...'
+      }
+    };
+
+    const valResult = validateEvent(photoEvt);
+    assert.strictEqual(valResult.valid, true, 'PHOTO_ATTACHED must be a valid canonical event');
+
+    const creationEvt: PeerScribeEvent = {
+      schema_version: 1,
+      event_id: 'evt_pt_create_photo',
+      operation_id: 'OP_TEST',
+      entity_id: 'pt_test_photo',
+      event_type: 'PATIENT_CREATED',
+      actor_id: 'node_medic_01',
+      actor_sequence: 1,
+      lamport_timestamp: 1,
+      occurred_at_utc: '2026-10-25T14:00:00.000Z',
+      payload: { ephemeral_id: 'PHOTO-BEAR-12' }
+    };
+
+    const proj = projectPatientState([creationEvt, photoEvt]);
+    assert.ok(proj, 'Projected state must not be null');
+    assert.strictEqual(proj.photos.length, 1);
+    assert.strictEqual(proj.photos[0].photo_type, 'WOUND');
+    assert.strictEqual(proj.photos[0].caption, 'Compound left femur fracture with bleeding controlled');
+    assert.strictEqual(proj.photos[0].file_size_bytes, 45210);
+  });
 });

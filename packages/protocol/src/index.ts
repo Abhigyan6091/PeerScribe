@@ -9,6 +9,7 @@ export type PeerScribeEventType =
   | 'LOCATION_OBSERVED'
   | 'SOS_CREATED'
   | 'VAULT_SNAPSHOT_ATTACHED'
+  | 'PHOTO_ATTACHED'
   | 'DIVERGENCE_ACKNOWLEDGED'
   | 'DIVERGENCE_RESOLVED'
   | 'AUTHORIZATION_FAILED';
@@ -71,6 +72,7 @@ export const ROLE_CAPABILITIES: Record<ResponderRole, Capability[]> = {
 
 export const EVENT_REQUIRED_CAPABILITIES: Partial<Record<PeerScribeEventType, Capability>> = {
   OBSERVATION_RECORDED: 'RECORD_OBSERVATION',
+  PHOTO_ATTACHED: 'RECORD_OBSERVATION',
   VITALS_RECORDED: 'RECORD_VITALS',
   INJURY_RECORDED: 'RECORD_INJURY',
   TRIAGE_STATUS_CHANGED: 'OVERRIDE_TRIAGE',
@@ -138,6 +140,7 @@ export interface ProjectedPatientState {
   medications: any[];
   known_allergies: string[];
   notes: any[];
+  photos: any[];
   divergence_flags: any[];
   authorization_failures?: any[];
 }
@@ -165,7 +168,7 @@ export function validateEvent(event: any): { valid: boolean; errors: string[] } 
   const validTypes: PeerScribeEventType[] = [
     'PATIENT_CREATED', 'OBSERVATION_RECORDED', 'VITALS_RECORDED', 'INJURY_RECORDED',
     'ALLERGY_RECORDED', 'TRIAGE_STATUS_CHANGED', 'MEDICATION_RECORDED', 'LOCATION_OBSERVED',
-    'SOS_CREATED', 'VAULT_SNAPSHOT_ATTACHED', 'DIVERGENCE_ACKNOWLEDGED', 'DIVERGENCE_RESOLVED',
+    'SOS_CREATED', 'VAULT_SNAPSHOT_ATTACHED', 'PHOTO_ATTACHED', 'DIVERGENCE_ACKNOWLEDGED', 'DIVERGENCE_RESOLVED',
     'AUTHORIZATION_FAILED'
   ];
   if (!validTypes.includes(event.event_type)) {
@@ -264,6 +267,7 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
     medications: [],
     known_allergies: [],
     notes: [],
+    photos: [],
     divergence_flags: [],
     authorization_failures: []
   };
@@ -304,6 +308,21 @@ export function projectPatientState(events: PeerScribeEvent[]): ProjectedPatient
           event_id: evt.event_id,
           timestamp: evt.occurred_at_utc,
           text: `[EMERGENCY ID] Blood: ${evt.payload.blood_group || 'UNKNOWN'} | Allergies: ${(evt.payload.allergies || []).join(', ')}`
+        });
+        break;
+      case 'PHOTO_ATTACHED':
+        if (!state.photos) state.photos = [];
+        state.photos.push({
+          event_id: evt.event_id,
+          photo_id: evt.payload.photo_id || evt.event_id,
+          photo_type: evt.payload.photo_type || 'WOUND',
+          caption: evt.payload.caption || '',
+          mime_type: evt.payload.mime_type || 'image/jpeg',
+          image_base64: evt.payload.image_base64 || '',
+          file_size_bytes: evt.payload.file_size_bytes || 0,
+          sha256_checksum: evt.payload.sha256_checksum || '',
+          timestamp: evt.occurred_at_utc,
+          actor_id: evt.actor_id
         });
         break;
       case 'TRIAGE_STATUS_CHANGED':

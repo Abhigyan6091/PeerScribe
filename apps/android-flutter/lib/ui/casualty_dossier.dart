@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'package:peerscribe_mobile/core/protocol/event_model.dart';
@@ -9,6 +10,7 @@ import 'theme.dart';
 import 'divergence_modal.dart';
 import 'search_heatmap.dart';
 import 'package:peerscribe_mobile/core/ai/offline_whisper_service.dart';
+import 'package:peerscribe_mobile/core/media/camera_photo_service.dart';
 
 class CasualtyDossierScreen extends StatefulWidget {
   final String patientId;
@@ -243,6 +245,236 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                     child: const Text('COMMIT CLINICAL OBSERVATION', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showAttachPhotoDialog() {
+    final captionController = TextEditingController(text: 'Compound fracture left leg with bleeding');
+    String selectedType = 'WOUND';
+    String selectedPreset = 'WOUND_FEMUR';
+    TacticalPhotoCapture? activePhoto;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: TacticalTheme.surface,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                left: 16,
+                right: 16,
+                top: 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('TRAUMA PHOTO & WOUND CAPTURE',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: TacticalTheme.primary)),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: TacticalTheme.textMuted),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text('Captures forensic clinical imagery, compresses to high-contrast JPEG, and synchronizes to mesh DTN outbox.',
+                        style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 12)),
+                    const SizedBox(height: 12),
+
+                    // Preset Chips
+                    const Text('TACTICAL CLINICAL PRESETS:', style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Femur Fracture', style: TextStyle(fontSize: 11)),
+                          selected: selectedPreset == 'WOUND_FEMUR',
+                          onSelected: (val) {
+                            setModalState(() {
+                              selectedPreset = 'WOUND_FEMUR';
+                              selectedType = 'WOUND';
+                              captionController.text = 'Open compound fracture left femur with active capillary bleeding';
+                              activePhoto = null;
+                            });
+                          },
+                        ),
+                        ChoiceChip(
+                          label: const Text('Thermal Burn', style: TextStyle(fontSize: 11)),
+                          selected: selectedPreset == 'TRAUMA_BURN',
+                          onSelected: (val) {
+                            setModalState(() {
+                              selectedPreset = 'TRAUMA_BURN';
+                              selectedType = 'BURN';
+                              captionController.text = 'Second-degree thermal burns across left forearm';
+                              activePhoto = null;
+                            });
+                          },
+                        ),
+                        ChoiceChip(
+                          label: const Text('Shrapnel Laceration', style: TextStyle(fontSize: 11)),
+                          selected: selectedPreset == 'SHRAPNEL_LACERATION',
+                          onSelected: (val) {
+                            setModalState(() {
+                              selectedPreset = 'SHRAPNEL_LACERATION';
+                              selectedType = 'TRAUMA';
+                              captionController.text = 'Deep shrapnel puncture lacerations in thoracic chest wall';
+                              activePhoto = null;
+                            });
+                          },
+                        ),
+                        ChoiceChip(
+                          label: const Text('Facial ID Profile', style: TextStyle(fontSize: 11)),
+                          selected: selectedPreset == 'FACIAL_ID',
+                          onSelected: (val) {
+                            setModalState(() {
+                              selectedPreset = 'FACIAL_ID';
+                              selectedType = 'FACIAL_THUMBNAIL';
+                              captionController.text = 'Tactical casualty facial profile for triage re-identification';
+                              activePhoto = null;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Caption input
+                    TextField(
+                      controller: captionController,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'CLINICAL WOUND CAPTION',
+                        labelStyle: TextStyle(color: TacticalTheme.primary, fontSize: 12),
+                        border: OutlineInputBorder(),
+                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: TacticalTheme.primary)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Preview Box
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: TacticalTheme.surfaceVariant,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: TacticalTheme.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                activePhoto != null
+                                    ? 'JPEG ATTACHMENT READY (${(activePhoto!.fileSizeBytes / 1024).toStringAsFixed(1)} KB)'
+                                    : 'PHOTO NOT CAPTURED YET',
+                                style: const TextStyle(color: TacticalTheme.primary, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: TacticalTheme.primary,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                ),
+                                icon: const Icon(Icons.camera, size: 14),
+                                label: const Text('SNAP / RENDER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                onPressed: () async {
+                                  final photo = await CameraPhotoService().captureOrSynthesizePhoto(
+                                    photoType: selectedType,
+                                    caption: captionController.text.trim(),
+                                    preset: selectedPreset,
+                                  );
+                                  setModalState(() {
+                                    activePhoto = photo;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                          if (activePhoto != null) ...[
+                            const SizedBox(height: 10),
+                            Center(
+                              child: Container(
+                                height: 120,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: TacticalTheme.primary),
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: Image.memory(
+                                  base64Decode(activePhoto!.imageBase64),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Center(
+                                    child: Icon(Icons.image, color: TacticalTheme.primary, size: 48),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'SHA256: ${activePhoto!.sha256Checksum.substring(0, 16)}... | ${activePhoto!.width}x${activePhoto!.height}px',
+                              style: const TextStyle(color: TacticalTheme.textMuted, fontSize: 11),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: TacticalTheme.primary,
+                        foregroundColor: Colors.black,
+                        minimumSize: const Size(double.infinity, 44),
+                      ),
+                      onPressed: () async {
+                        final photoToSave = activePhoto ??
+                            await CameraPhotoService().captureOrSynthesizePhoto(
+                              photoType: selectedType,
+                              caption: captionController.text.trim(),
+                              preset: selectedPreset,
+                            );
+
+                        await CameraPhotoService().attachPhotoToCasualty(
+                          patientId: widget.patientId,
+                          operationId: _projectedPatient?.operationId ?? 'OP_TACTICAL',
+                          actorId: 'medic_mobile_${widget.currentRole.name}',
+                          actorRole: widget.currentRole.name.toUpperCase(),
+                          photo: photoToSave,
+                        );
+
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          _loadPatientData();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('📸 Tactical wound photo durably attached and enqueued to mesh outbox!'),
+                              backgroundColor: TacticalTheme.triageGreen,
+                            ),
+                          );
+                        }
+                      },
+                      child: const Text('ATTACH PHOTO TO CASUALTY DOSSIER', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -529,8 +761,137 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                           icon: const Icon(Icons.medical_services_outlined, size: 15),
                           label: const Text('TRIAGE', style: TextStyle(fontSize: 11)),
                         ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: TacticalTheme.surfaceVariant,
+                            foregroundColor: TacticalTheme.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          onPressed: _showAttachPhotoDialog,
+                          icon: const Icon(Icons.camera_alt, size: 15),
+                          label: const Text('PHOTO/WOUND', style: TextStyle(fontSize: 11)),
+                        ),
                       ],
                     ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Forensic Photo Evidence & Trauma Imagery Card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('FORENSIC PHOTO EVIDENCE & IMAGERY',
+                            style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.bold)),
+                        TextButton.icon(
+                          onPressed: _showAttachPhotoDialog,
+                          icon: const Icon(Icons.add_a_photo, size: 14, color: TacticalTheme.primary),
+                          label: const Text('ADD PHOTO', style: TextStyle(fontSize: 11, color: TacticalTheme.primary)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (p.photos.isEmpty)
+                      const Text('No wound or trauma photos attached yet.',
+                          style: TextStyle(color: TacticalTheme.textMuted, fontSize: 13))
+                    else
+                      ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: p.photos.length,
+                        separatorBuilder: (_, __) => const Divider(color: TacticalTheme.border),
+                        itemBuilder: (context, idx) {
+                          final photo = p.photos[idx];
+                          final b64 = photo['image_base64']?.toString() ?? '';
+                          final type = photo['photo_type']?.toString() ?? 'WOUND';
+                          final caption = photo['caption']?.toString() ?? 'Tactical image';
+                          final bytes = (photo['file_size_bytes'] as num?)?.toInt() ?? 0;
+                          final time = photo['timestamp']?.toString() ?? '';
+
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 68,
+                                height: 68,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: TacticalTheme.border),
+                                  color: TacticalTheme.surfaceVariant,
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: b64.isNotEmpty
+                                    ? Image.memory(
+                                        base64Decode(b64),
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => const Center(
+                                          child: Icon(Icons.broken_image, color: TacticalTheme.textMuted),
+                                        ),
+                                      )
+                                    : const Center(
+                                        child: Icon(Icons.image, color: TacticalTheme.textMuted),
+                                      ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: type == 'BURN'
+                                                ? TacticalTheme.triageYellow.withOpacity(0.2)
+                                                : TacticalTheme.triageRed.withOpacity(0.2),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(
+                                              color: type == 'BURN' ? TacticalTheme.triageYellow : TacticalTheme.triageRed,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            type,
+                                            style: TextStyle(
+                                              color: type == 'BURN' ? TacticalTheme.triageYellow : TacticalTheme.triageRed,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '${(bytes / 1024).toStringAsFixed(1)} KB',
+                                          style: const TextStyle(color: TacticalTheme.textMuted, fontSize: 11),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      caption,
+                                      style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      time,
+                                      style: const TextStyle(color: TacticalTheme.textMuted, fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
                   ],
                 ),
               ),

@@ -1692,7 +1692,7 @@ function closeCasualtyDossier() {
 
 function switchDossierTab(tab) {
   currentDossierTab = tab;
-  ['vitals', 'injuries', 'meds', 'notes', 'vault'].forEach(t => {
+  ['vitals', 'injuries', 'meds', 'notes', 'photos', 'vault'].forEach(t => {
     const btn = document.getElementById(`dosTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
     if (btn) btn.classList.toggle('active', t === tab);
   });
@@ -1705,6 +1705,48 @@ function renderDossierContent() {
 
   const doc = activeDossierData?.doc;
   const targetId = activePatient.patientId || activePatient.id;
+
+  if (currentDossierTab === 'photos') {
+    const photos = doc?.photos || [];
+    const listHtml = photos.length === 0
+      ? '<div style="color: #64748B; font-size: 0.85rem; padding: 24px 0; text-align: center;">No clinical wound photos or trauma imagery synced yet for this casualty.</div>'
+      : `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px;">
+          ${photos.slice().reverse().map(p => `
+            <div class="dossier-card" style="padding: 10px; background: rgba(13, 18, 29, 0.8); border: 1px solid var(--border);">
+              <div style="width: 100%; height: 160px; background: #000; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; margin-bottom: 8px;">
+                ${p.image_base64
+                  ? `<img src="data:${p.mime_type || 'image/jpeg'};base64,${p.image_base64}" style="width: 100%; height: 100%; object-fit: cover; cursor: pointer;" alt="${p.caption || 'Wound photo'}" />`
+                  : `<div style="color: var(--text-muted); font-size: 0.8rem;">No Image Data</div>`
+                }
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 0.72rem; font-weight: 800; padding: 2px 6px; border-radius: 3px; background: ${p.photo_type === 'BURN' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.2)'}; color: ${p.photo_type === 'BURN' ? '#F59E0B' : '#EF4444'}; border: 1px solid ${p.photo_type === 'BURN' ? '#F59E0B' : '#EF4444'};">
+                  ${p.photo_type || 'WOUND'}
+                </span>
+                <span style="font-size: 0.7rem; color: var(--text-muted); font-family: var(--font-mono);">
+                  ${p.file_size_bytes ? (p.file_size_bytes / 1024).toFixed(1) + ' KB' : ''}
+                </span>
+              </div>
+              <div style="font-size: 0.82rem; font-weight: 600; color: #FFF; margin-bottom: 4px;">
+                ${p.caption || 'Trauma capture'}
+              </div>
+              <div style="font-size: 0.7rem; color: var(--text-muted);">
+                ${p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : ''} • By <code>${p.actor_id || 'peer'}</code>
+              </div>
+            </div>
+          `).join('')}
+        </div>`;
+
+    container.innerHTML = `
+      <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-primary); font-weight: 800;">
+          📸 Attached Clinical Imagery &amp; Wound Photos (${photos.length})
+        </span>
+      </div>
+      ${listHtml}
+    `;
+    return;
+  }
 
   if (currentDossierTab === 'vitals') {
     const vitals = doc?.vitals || [];
