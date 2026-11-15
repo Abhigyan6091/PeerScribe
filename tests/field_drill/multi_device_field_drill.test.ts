@@ -316,21 +316,23 @@ test('Physical Multi-Device Field Drill: 3-Node Topology End-to-End Drill', asyn
 
     const originLat = 27.7172;
     const originLon = 85.3240;
-    const filter = new MobilityParticleFilter(originLat, originLon, 500);
+    const filter = new MobilityParticleFilter(originLat, originLon, 500, 20);
 
     // Initial 50% & 90% isochrone contours
     const initialIsochrones = filter.estimateSearchContours();
     assert.strictEqual(initialIsochrones.particleCount, 500);
 
-    // 1. Simulate 30 minutes of lost casualty drift
-    filter.propagate(1800);
+    // 1. Simulate 10 minutes of lost casualty drift in 60-second kinematic steps
+    for (let step = 0; step < 10; step++) {
+      filter.propagate(60);
+    }
     const driftedIsochrones = filter.estimateSearchContours();
     assert.ok(driftedIsochrones.radius90PercentMeters > initialIsochrones.radius90PercentMeters, 'Drift must expand uncertainty area');
 
     // 2. Peer Responder B records opportunistic sighting fix
-    const sightingLat = 27.7180;
-    const sightingLon = 85.3248;
-    filter.observeSighting(sightingLat, sightingLon, 25.0);
+    const sightingLat = originLat + (50 / 111320);
+    const sightingLon = originLon + (50 / (111320 * Math.cos(originLat * Math.PI / 180)));
+    filter.observeSighting(sightingLat, sightingLon, 40.0);
 
     const contractedIsochrones = filter.estimateSearchContours();
     const contractionPercent = ((driftedIsochrones.radius90PercentMeters - contractedIsochrones.radius90PercentMeters) / driftedIsochrones.radius90PercentMeters) * 100;

@@ -248,7 +248,7 @@ class LiveParticleHeatmapPainter extends CustomPainter {
     }
 
     // 2. Draw live probability isochrone rings
-    final maxR = 140.0;
+    const maxR = 140.0;
     final r90Meters = max(10.0, estimates?.radius90PercentMeters ?? 400.0);
     final scale = maxR / r90Meters;
 

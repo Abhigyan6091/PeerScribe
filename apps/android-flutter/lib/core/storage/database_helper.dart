@@ -145,6 +145,33 @@ class DatabaseHelper {
 
   /// Inserts a new event into the immutable log and enqueues it in the outbox.
   /// Rejects duplicate event insertion (returns false if event_id already exists).
+  /// Alias for insertEvent for clinical records.
+  Future<bool> recordEvent(PeerScribeEvent event) => insertEvent(event);
+
+  /// Calculates the next sequential sequence number for a local actor.
+  Future<int> getNextActorSequence(String actorId) async {
+    final db = await getDatabase();
+    final res = await db.rawQuery(
+      'SELECT MAX(actor_sequence) as max_seq FROM events WHERE actor_id = ?',
+      [actorId],
+    );
+    final maxSeq = (res.first['max_seq'] as num?)?.toInt() ?? 0;
+    return maxSeq + 1;
+  }
+
+  /// Returns the highest Lamport logical timestamp recorded so far.
+  Future<int> getHighestLamportTimestamp() async {
+    final db = await getDatabase();
+    final res = await db.rawQuery('SELECT MAX(lamport_timestamp) as max_lamport FROM events');
+    return (res.first['max_lamport'] as num?)?.toInt() ?? 0;
+  }
+
+  /// Retrieves events for a specific entity ID.
+  Future<List<PeerScribeEvent>> getEventsForEntity(String entityId) => getEventsForPatient(entityId);
+
+  /// Retrieves queued outbox events.
+  Future<List<PeerScribeEvent>> getQueuedOutboxEvents() => getOutbox();
+
   Future<bool> insertEvent(PeerScribeEvent event) async {
     final db = await getDatabase();
 

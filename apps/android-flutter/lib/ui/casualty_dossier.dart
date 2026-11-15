@@ -454,7 +454,7 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
 
                         await CameraPhotoService().attachPhotoToCasualty(
                           patientId: widget.patientId,
-                          operationId: _projectedPatient?.operationId ?? 'OP_TACTICAL',
+                          operationId: _patient?.operationId ?? 'OP_TACTICAL',
                           actorId: 'medic_mobile_${widget.currentRole.name}',
                           actorRole: widget.currentRole.name.toUpperCase(),
                           photo: photoToSave,
