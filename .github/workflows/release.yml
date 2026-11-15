@@ -148,7 +148,7 @@ jobs:
       - name: Build Android Release APK
         working-directory: apps/android-flutter
         run: |
-          flutter build apk --release
+          flutter build apk --release --no-tree-shake-icons
 
       - name: Stage Android Release APK
         run: |
