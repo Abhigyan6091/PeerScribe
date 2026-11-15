@@ -10,6 +10,7 @@ import 'package:peerscribe_mobile/core/sync/delta_update_manager.dart';
 import 'package:peerscribe_mobile/core/clinical/patient_projection.dart';
 import 'theme.dart';
 import 'casualty_dossier.dart';
+import 'package:peerscribe_mobile/core/location/gps_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -510,8 +511,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return PopupMenuButton<String>(
       onSelected: (mode) {
         setState(() => _currentMode = mode);
+        if (mode == 'DORMANT') {
+          GpsService().setOperationalMode(OperationalDutyMode.dormant);
+        } else if (mode == 'FIELD') {
+          GpsService().setOperationalMode(OperationalDutyMode.field);
+        } else if (mode == 'EMERGENCY') {
+          GpsService().setOperationalMode(OperationalDutyMode.emergency);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Switched to $mode Mode')),
+          SnackBar(content: Text('Switched to $mode Mode (GNSS Duty Cycle Updated)')),
         );
       },
       itemBuilder: (context) => [

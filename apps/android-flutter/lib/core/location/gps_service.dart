@@ -34,6 +34,12 @@ class GpsCoordinates {
   };
 }
 
+enum OperationalDutyMode {
+  dormant, // Radio silence: 0 updates, GPS turned off to preserve battery
+  field, // Tactical field duty cycle: 120s interval, 20m distance threshold
+  emergency, // Tactical emergency duty cycle: 5s continuous high-precision GPS
+}
+
 /// Real GPS/GNSS Location Integration Service.
 /// Streams live satellite coordinates, computes tactical geohashes,
 /// emits OBSERVATION_RECORDED events, and feeds sightings into the particle filter.
@@ -45,6 +51,7 @@ class GpsService {
   static const MethodChannel _locationChannel = MethodChannel('com.peerscribe.mesh/location');
 
   bool _isTracking = false;
+  OperationalDutyMode _currentDutyMode = OperationalDutyMode.field;
   GpsCoordinates? _lastCoordinates;
   Timer? _pollingTimer;
 
@@ -54,6 +61,37 @@ class GpsService {
   Stream<GpsCoordinates> get locationStream => _locationController.stream;
   GpsCoordinates? get lastCoordinates => _lastCoordinates;
   bool get isTracking => _isTracking;
+  OperationalDutyMode get currentDutyMode => _currentDutyMode;
+
+  /// Sets the operational duty cycle mode:
+  /// - DORMANT: 0 updates (GPS radio off)
+  /// - FIELD: 120s interval (battery conservation)
+  /// - EMERGENCY: 5s interval (continuous tactical precision)
+  Future<void> setOperationalMode(OperationalDutyMode mode) async {
+    _currentDutyMode = mode;
+    switch (mode) {
+      case OperationalDutyMode.dormant:
+        await stop();
+        try {
+          await _locationChannel.invokeMethod('setDutyCycleMode', {'mode': 'DORMANT'});
+        } catch (_) {}
+        break;
+      case OperationalDutyMode.field:
+        if (_isTracking) await stop();
+        await startTracking(intervalSeconds: 120);
+        try {
+          await _locationChannel.invokeMethod('setDutyCycleMode', {'mode': 'FIELD'});
+        } catch (_) {}
+        break;
+      case OperationalDutyMode.emergency:
+        if (_isTracking) await stop();
+        await startTracking(intervalSeconds: 5);
+        try {
+          await _locationChannel.invokeMethod('setDutyCycleMode', {'mode': 'EMERGENCY'});
+        } catch (_) {}
+        break;
+    }
+  }
 
   /// Start tracking GPS fixes when in FIELD or EMERGENCY mode.
   Future<void> startTracking({int intervalSeconds = 10}) async {
@@ -70,6 +108,7 @@ class GpsService {
 
       await _locationChannel.invokeMethod('startLocationUpdates', {
         'interval': intervalSeconds * 1000,
+        'minDistance': intervalSeconds >= 120 ? 20.0 : 0.0,
       });
     } on MissingPluginException {
       _startSimulatedGpsStream(intervalSeconds);

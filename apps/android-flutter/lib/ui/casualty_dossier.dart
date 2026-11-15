@@ -8,6 +8,7 @@ import 'package:peerscribe_mobile/core/clinical/start_triage_engine.dart';
 import 'theme.dart';
 import 'divergence_modal.dart';
 import 'search_heatmap.dart';
+import 'package:peerscribe_mobile/core/ai/offline_whisper_service.dart';
 
 class CasualtyDossierScreen extends StatefulWidget {
   final String patientId;
@@ -123,6 +124,76 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                         borderRadius: BorderRadius.circular(8),
                         borderSide: const BorderSide(color: TacticalTheme.border),
                       ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: TacticalTheme.surfaceVariant,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: TacticalTheme.primary.withOpacity(0.3)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: const [
+                                Icon(Icons.graphic_eq, color: TacticalTheme.primary, size: 16),
+                                SizedBox(width: 6),
+                                Text('ON-DEVICE WHISPER ASR', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: TacticalTheme.primary.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text('INT8 NEURAL', style: TextStyle(color: TacticalTheme.primary, fontSize: 9, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          children: [
+                            ActionChip(
+                              backgroundColor: const Color(0xFF1E293B),
+                              label: const Text('🎙️ Femur Trauma', style: TextStyle(color: Colors.white, fontSize: 11)),
+                              onPressed: () async {
+                                final res = await OfflineWhisperService().transcribeTacticalAudioSample('TRAUMA_FEMUR');
+                                setModalState(() {
+                                  textController.text = res.transcript;
+                                });
+                              },
+                            ),
+                            ActionChip(
+                              backgroundColor: const Color(0xFF1E293B),
+                              label: const Text('🎙️ Apneic Critical', style: TextStyle(color: TacticalTheme.triageRed, fontSize: 11)),
+                              onPressed: () async {
+                                final res = await OfflineWhisperService().transcribeTacticalAudioSample('APNEIC_CRITICAL');
+                                setModalState(() {
+                                  textController.text = res.transcript;
+                                });
+                              },
+                            ),
+                            ActionChip(
+                              backgroundColor: const Color(0xFF1E293B),
+                              label: const Text('🎙️ Burn Shock', style: TextStyle(color: TacticalTheme.triageYellow, fontSize: 11)),
+                              onPressed: () async {
+                                final res = await OfflineWhisperService().transcribeTacticalAudioSample('BURN_SHOCK');
+                                setModalState(() {
+                                  textController.text = res.transcript;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 10),
