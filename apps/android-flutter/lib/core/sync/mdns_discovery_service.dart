@@ -80,10 +80,9 @@ class MdnsDiscoveryService {
   Timer? _pruneTimer;
 
   String _localNodeId = 'node_mobile_flutter';
-  String _localPlatform = 'android-flutter';
+  final String _localPlatform = 'android-flutter';
   String _localRole = 'MEDICAL_RESPONDER';
   int _localPort = 4322;
-  String _localPairingPin = '';
   List<String> _localIps = ['127.0.0.1'];
 
   final Map<String, DiscoveredPeer> _discoveredPeers = {};
@@ -107,7 +106,6 @@ class MdnsDiscoveryService {
 
     _localNodeId = localNodeId;
     _localPort = localPort;
-    _localPairingPin = pairingPin;
     _localRole = role;
     if (localIps != null && localIps.isNotEmpty) {
       _localIps = localIps;

@@ -279,13 +279,64 @@ class LanSyncService {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
       _port = _server!.port;
       _server!.listen(_handleIncomingRequest);
+      _initDiscoveryServices();
       return _port;
     } catch (_) {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
       _port = _server!.port;
       _server!.listen(_handleIncomingRequest);
+      _initDiscoveryServices();
       return _port;
     }
+  }
+
+  /// Ensures server is active, restarting if it was closed or killed.
+  Future<int> ensureServerRunning() async {
+    if (_server == null) {
+      return await startServer(port: _port);
+    }
+    _initDiscoveryServices();
+    return _port;
+  }
+
+  /// Returns a list of active non-loopback IPv4 addresses assigned to this device.
+  Future<List<String>> getLocalIpAddresses() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      final addresses = <String>[];
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && addr.address.isNotEmpty) {
+            addresses.add(addr.address);
+          }
+        }
+      }
+      return addresses;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  void _initDiscoveryServices() {
+    getLocalIpAddresses().then((localIps) {
+      MdnsDiscoveryService().startDiscovery(
+        localNodeId: _nodeId,
+        localPort: _port,
+        pairingPin: _activePairingPin,
+        localIps: localIps,
+      );
+      BleMeshService().startAdvertising(
+        localNodeId: _nodeId,
+        localRole: ResponderRole.medicalResponder,
+        geohash: 'u15ek200',
+      );
+      BleMeshService().startScanning();
+    }).catchError((e) {
+      // safe fallback if discovery services encounter binding errors
+    });
   }
 
   void _handleIncomingRequest(HttpRequest request) async {
@@ -321,6 +372,7 @@ class LanSyncService {
       if (path == '/api/v1/sync/info' && request.method == 'GET') {
         final outbox = await _db.getOutbox();
         final op = await _db.getActiveOperation();
+        final ips = await getLocalIpAddresses();
         response.headers.contentType = ContentType.json;
         response.write(json.encode({
           'status': 'OK',
@@ -328,6 +380,7 @@ class LanSyncService {
           'appVersion': '1.0.0',
           'platform': 'android-flutter',
           'port': _port,
+          'ipAddresses': ips,
           'operationId': op['operation_id'],
           'outboxCount': outbox.length,
           'requiresPairing': true,
