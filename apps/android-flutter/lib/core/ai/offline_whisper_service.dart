@@ -52,6 +52,16 @@ class OfflineWhisperService {
   String get modelArchitecture => defaultArchitecture;
   String get architecture => defaultArchitecture;
 
+  /// Checks whether native platform NPU/DSP neural acceleration is available via MethodChannel.
+  Future<bool> checkHardwareAcceleration() async {
+    try {
+      final res = await _whisperChannel.invokeMethod<bool>('isModelAvailable');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Embedded quantized INT8 acoustic projection weight matrix for clinical domain tokens
   static final Int8List _quantizedAcousticWeights = _generateQuantizedWeights();
 
@@ -130,7 +140,7 @@ class OfflineWhisperService {
   /// Pre-configured tactical emergency audio dictations for instantaneous field testing or simulation.
   Future<WhisperTranscriptionResult> transcribeTacticalAudioSample(String speechPreset) async {
     // Generate synthetic 16kHz PCM audio buffer matching tactical scenario
-    final duration = 2.5;
+    const duration = 2.5;
     final sampleCount = (sampleRateHz * duration).toInt();
     final samples = Float32List(sampleCount);
     final random = Random(42);
@@ -187,8 +197,8 @@ class OfflineWhisperService {
 
   List<double> _computeMelSpectrogram(Float32List samples) {
     final melEnergies = List<double>.filled(melChannels, 0.0);
-    final frameSize = 400;
-    final hopSize = 160;
+    const frameSize = 400;
+    const hopSize = 160;
     int frameCount = 0;
 
     for (int start = 0; start + frameSize <= samples.length; start += hopSize) {

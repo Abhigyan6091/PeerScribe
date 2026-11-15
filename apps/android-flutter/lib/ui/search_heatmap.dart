@@ -150,7 +150,7 @@ class _SearchHeatmapViewState extends State<SearchHeatmapView> {
                     ),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: TacticalTheme.surfaceHighlight,
+                        backgroundColor: TacticalTheme.surfaceVariant,
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       ),
                       icon: const Icon(Icons.sensors, size: 16, color: TacticalTheme.primary),
@@ -187,7 +187,7 @@ class _SearchHeatmapViewState extends State<SearchHeatmapView> {
               children: [
                 _buildMetric('Active Swarm', '${estimates?.particleCount ?? 500} pts', Colors.white),
                 _buildMetric('50% Radius', radius50, TacticalTheme.triageGreen),
-                _buildMetric('90% Radius', radius90, TacticalTheme.triageAmber),
+                _buildMetric('90% Radius', radius90, TacticalTheme.triageYellow),
                 _buildMetric('Contraction', contraction, TacticalTheme.primary),
               ],
             ),
@@ -263,9 +263,9 @@ class LiveParticleHeatmapPainter extends CustomPainter {
       ..strokeWidth = 1.5;
     canvas.drawCircle(center, ring90Radius.clamp(10.0, maxR), paint90);
 
-    // 75% Confidence Ring (Amber)
+    // 75% Confidence Ring (Yellow)
     final paint75 = Paint()
-      ..color = TacticalTheme.triageAmber.withOpacity(0.4)
+      ..color = TacticalTheme.triageYellow.withOpacity(0.4)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     canvas.drawCircle(center, ring75Radius.clamp(10.0, maxR), paint75);

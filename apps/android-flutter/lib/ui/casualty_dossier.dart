@@ -207,21 +207,21 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                         backgroundColor: TacticalTheme.surfaceVariant,
                         label: const Text('Resp > 30 bpm', style: TextStyle(color: TacticalTheme.primary, fontSize: 11)),
                         onPressed: () {
-                          textController.text = (textController.text + ' Respiration rate 32 bpm.').trim();
+                          textController.text = '${textController.text} Respiration rate 32 bpm.'.trim();
                         },
                       ),
                       ActionChip(
                         backgroundColor: TacticalTheme.surfaceVariant,
                         label: const Text('Absent Radial Pulse', style: TextStyle(color: TacticalTheme.triageRed, fontSize: 11)),
                         onPressed: () {
-                          textController.text = (textController.text + ' Radial pulse absent.').trim();
+                          textController.text = '${textController.text} Radial pulse absent.'.trim();
                         },
                       ),
                       ActionChip(
                         backgroundColor: TacticalTheme.surfaceVariant,
                         label: const Text('Unresponsive', style: TextStyle(color: TacticalTheme.triageYellow, fontSize: 11)),
                         onPressed: () {
-                          textController.text = (textController.text + ' Unconscious and unresponsive.').trim();
+                          textController.text = '${textController.text} Unconscious and unresponsive.'.trim();
                         },
                       ),
                     ],
