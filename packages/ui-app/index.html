@@ -2,494 +2,1208 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="description" content="PeerScribe: Offline-first peer-to-peer clinical coordination for disaster response. Works without internet — mesh BLE sync, deterministic START triage AI, and cryptographic audit trails.">
-  <meta name="theme-color" content="#090A0D">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <meta name="description" content="PeerScribe: Offline-first peer-to-peer clinical coordination for disaster response. Mesh BLE synchronization, deterministic START triage AI, and cryptographic audit trails.">
+  <meta name="theme-color" content="#0B0F14">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>PeerScribe | Tactical Clinical Mesh</title>
+  
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles/tokens.css">
+  
   <style>
-    /* Use JetBrains Mono for monospace sections */
-    .tactical-bar, .tele-card, .voice-panel { font-family: 'Inter', -apple-system, sans-serif; }
-    code, .tele-card, .voice-input, #vuMeterDb, .ptt-timer-badge { font-family: 'JetBrains Mono', monospace; }
-    /* Tactical Layout Styles */
-    .app-container {
-      max-width: 600px;
-      margin: 0 auto;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding-bottom: 96px;
+    /* ==========================================================================
+       PeerScribe Tactical Responsive Dashboard Stylesheet
+       ========================================================================== */
+
+    /* Typography & Code Elements */
+    html, body {
+      overflow-x: hidden;
+      width: 100%;
+      max-width: 100vw;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    *, *:before, *:after {
+      box-sizing: border-box;
+    }
+    .tactical-header, .operation-card, .card-title, .triage-btn, .btn-action {
+      font-family: var(--font-family);
+    }
+    code, pre, .tele-card, .voice-input, #vuMeterDb, .ptt-timer-badge, 
+    .tele-field, .font-mono, .badge-mono, .cas-vitals {
+      font-family: var(--font-mono);
     }
 
-    /* Top Tactical Bar */
-    .tactical-bar {
+    /* Outer Container */
+    .app-container {
+      width: 100%;
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 14px 16px;
       display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    @media (min-width: 768px) {
+      .app-container {
+        padding: 18px 24px;
+        gap: 16px;
+      }
+    }
+
+    /* --------------------------------------------------------------------------
+       Top Tactical Header Bar
+       -------------------------------------------------------------------------- */
+    .tactical-header {
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 12px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       justify-content: space-between;
-      align-items: center;
-      background: var(--bg-surface);
-      border: var(--border-thick);
-      border-radius: var(--border-radius-tactical);
-      padding: 10px 14px;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
     }
-    .brand-title {
-      font-size: 1.15rem;
-      font-weight: var(--font-weight-heavy);
-      letter-spacing: 1px;
+
+    .brand-group {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
     }
+
     .pulse-dot {
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: var(--mesh-active);
-      box-shadow: 0 0 8px var(--mesh-active);
-      animation: pulse 1.8s infinite;
+      background: var(--accent-primary);
+      box-shadow: var(--mesh-active-glow);
+      animation: tacticalPulse 2s infinite ease-in-out;
+      flex-shrink: 0;
     }
-    @keyframes pulse {
+
+    @keyframes tacticalPulse {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+      50% { opacity: 0.35; transform: scale(0.85); }
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 900;
+      letter-spacing: 0.75px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-version {
+      font-size: 0.68rem;
+      font-weight: 800;
+      color: var(--accent-primary);
+      background: var(--accent-primary-tint);
+      border: 1px solid var(--accent-primary);
+      padding: 2px 6px;
+      border-radius: var(--radius-xs);
+      letter-spacing: 0.5px;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .role-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-elevated);
+      border: var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 2px 8px;
+    }
+
+    .role-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      color: var(--text-secondary);
+      letter-spacing: 0.5px;
+    }
+
+    .role-select {
+      background: transparent;
+      color: var(--accent-secondary);
+      border: none;
+      font-size: 0.76rem;
+      font-weight: 800;
+      cursor: pointer;
+      padding: 4px 2px;
+      outline: none;
+      font-family: inherit;
+    }
+
+    .role-select option {
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+
+    .btn-header {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 0.75rem;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      border: none;
+      white-space: nowrap;
+    }
+
+    .btn-header-ops {
+      background: rgba(250, 204, 21, 0.12);
+      border: 1px solid var(--triage-yellow);
+      color: var(--triage-yellow);
+    }
+
+    .btn-header-ops:hover {
+      background: rgba(250, 204, 21, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .btn-header-mesh {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid var(--accent-primary);
+      color: var(--accent-primary);
+    }
+
+    .btn-header-mesh:hover {
+      background: rgba(56, 189, 248, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .btn-header-delta {
+      background: var(--accent-primary-tint);
+      border: 1px solid var(--accent-primary);
+      color: var(--accent-primary);
+    }
+
+    .btn-header-delta:hover {
+      background: rgba(0, 214, 185, 0.22);
+      transform: translateY(-1px);
     }
 
     .mode-badge {
-      padding: 6px 12px;
-      border-radius: 4px;
-      font-weight: 800;
-      font-size: 0.8rem;
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-weight: 900;
+      font-size: 0.76rem;
       letter-spacing: 0.5px;
       text-transform: uppercase;
       background: var(--mode-field);
       color: #FFF;
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
       border: 1px solid rgba(255, 255, 255, 0.2);
-      transition: all 0.2s ease;
+      transition: all 0.18s ease;
+      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
     }
+
     .mode-badge:hover {
-      filter: brightness(1.2);
+      filter: brightness(1.15);
       transform: translateY(-1px);
     }
+
+    /* --------------------------------------------------------------------------
+       Operation Context Bar
+       -------------------------------------------------------------------------- */
+    .operation-card {
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 14px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .op-details {
+      flex: 1;
+      min-width: 240px;
+    }
+
+    .op-title-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .op-name {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: 0.2px;
+    }
+
+    .op-badge-active {
+      font-size: 0.68rem;
+      background: rgba(34, 197, 94, 0.2);
+      color: var(--triage-green);
+      border: 1px solid var(--triage-green);
+      padding: 2px 8px;
+      border-radius: var(--radius-xs);
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+
+    .op-meta {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .op-meta strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .op-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
+    @media (max-width: 600px) {
+      .op-controls {
+        align-items: flex-start;
+        width: 100%;
+      }
+    }
+
+    .mesh-badge {
+      font-size: 0.74rem;
+      font-weight: 700;
+      background: var(--accent-primary-tint);
+      color: var(--accent-primary);
+      border: 1px solid rgba(0, 214, 185, 0.35);
+      padding: 4px 10px;
+      border-radius: var(--radius-xs);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
     .mode-pills-row {
       display: flex;
       gap: 4px;
-      margin-top: 2px;
     }
+
     .mode-pill {
-      font-size: 0.65rem;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      padding: 3px 8px;
-      border-radius: 3px;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      background: rgba(255, 255, 255, 0.05);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      padding: 4px 10px;
+      border-radius: var(--radius-xs);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
       color: var(--text-secondary);
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s ease;
     }
+
     .mode-pill:hover {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.1);
       color: #FFF;
     }
+
     .mode-pill.active-mode-field {
       background: var(--mode-field);
       color: #FFF;
-      border-color: #63B3ED;
-      box-shadow: 0 0 8px rgba(49, 130, 206, 0.5);
+      border-color: #38BDF8;
+      box-shadow: 0 0 10px rgba(2, 132, 199, 0.4);
     }
+
     .mode-pill.active-mode-emergency {
       background: var(--mode-emergency);
       color: #FFF;
-      border-color: #FEB2B2;
-      box-shadow: 0 0 8px rgba(229, 62, 62, 0.6);
+      border-color: #F87171;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
     }
+
     .mode-pill.active-mode-dormant {
       background: var(--mode-dormant);
       color: #FFF;
-      border-color: #A0AEC0;
-      box-shadow: 0 0 8px rgba(74, 85, 104, 0.5);
+      border-color: #94A3B8;
+      box-shadow: 0 0 10px rgba(71, 85, 105, 0.4);
     }
+
+    /* --------------------------------------------------------------------------
+       Dormant Banner & Divergence Alert Banner
+       -------------------------------------------------------------------------- */
     .dormant-banner {
       display: none;
-      background: #181D28;
+      background: rgba(71, 85, 105, 0.25);
       border: 1px dashed var(--mode-dormant);
-      border-radius: var(--border-radius-tactical);
-      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      padding: 10px 16px;
       font-size: 0.8rem;
-      color: #CBD5E0;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .dormant-banner:hover {
-      background: #232B3B;
-    }
-
-    /* Operation Info Header */
-    .operation-card {
-      background: var(--bg-surface);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: var(--border-radius-tactical);
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .op-name {
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: var(--text-primary);
-    }
-    .op-meta {
-      font-size: 0.8rem;
-      color: var(--text-secondary);
-      margin-top: 2px;
-    }
-    .mesh-badge {
-      font-size: 0.75rem;
-      font-weight: 700;
-      background: rgba(0, 245, 212, 0.15);
-      color: var(--mesh-active);
-      border: 1px solid var(--mesh-active);
-      padding: 4px 8px;
-      border-radius: 4px;
-    }
-
-    /* Active Casualty Intake Card */
-    .casualty-intake-card {
-      background: var(--bg-surface);
-      border: 2px solid rgba(255, 255, 255, 0.2);
-      border-radius: var(--border-radius-tactical);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-    .patient-id-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .phonetic-id {
-      font-size: 1.8rem;
-      font-weight: var(--font-weight-heavy);
-      letter-spacing: 1px;
-    }
-    .identicon-box {
-      width: 48px;
-      height: 48px;
-      border-radius: 4px;
-      overflow: hidden;
-      border: 1px solid #FFF;
-    }
-
-    /* Two-Tap Triage Buttons (Fitts's Law Optimized) */
-    .triage-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    .triage-btn {
-      min-height: var(--touch-target-large);
-      border-radius: var(--border-radius-tactical);
-      font-family: inherit;
-      font-weight: 800;
-      font-size: 1.25rem;
-      letter-spacing: 1px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      border: none;
-      cursor: pointer;
-      color: #FFF;
-      transition: transform 0.08s ease, filter 0.08s ease;
-      box-shadow: var(--shadow-tactical);
-    }
-    .triage-btn:active {
-      transform: scale(0.96);
-      filter: brightness(1.2);
-    }
-    .triage-sub {
-      font-size: 0.75rem;
-      font-weight: 600;
-      opacity: 0.85;
-      margin-top: 2px;
-    }
-
-    .btn-red { background: var(--triage-red); }
-    .btn-yellow { background: var(--triage-yellow); color: #000; }
-    .btn-green { background: var(--triage-green); color: #000; }
-    .btn-black { background: var(--triage-black); }
-
-    /* Push-To-Talk Voice Bar & Live Dictation */
-    .ptt-container {
-      margin-top: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .ptt-bar {
-      min-height: var(--touch-target-large);
-      background: var(--bg-surface-elevated);
-      border: 2px dashed rgba(255,255,255,0.3);
-      border-radius: var(--border-radius-tactical);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      font-size: 1.02rem;
-      font-weight: 700;
-      cursor: pointer;
-      color: #FFF;
-      user-select: none;
-      transition: all 0.2s ease;
-      position: relative;
-    }
-    .ptt-bar:hover {
-      border-color: rgba(255,255,255,0.6);
-      background: #252A3A;
-    }
-    .ptt-bar.recording {
-      background: rgba(255, 26, 26, 0.22);
-      border-color: var(--triage-red);
-      color: #FF5252;
-      animation: alertPulse 1.1s infinite;
-    }
-    .ptt-timer-badge {
-      display: none;
-      background: var(--triage-red);
-      color: #FFF;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 0.78rem;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-      font-family: monospace;
-    }
-    .ptt-bar.recording .ptt-timer-badge {
-      display: inline-block;
-    }
-    .voice-panel {
-      background: #11141E;
-      border: 1px solid #2A3042;
-      border-radius: var(--border-radius-tactical);
-      padding: 10px 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .voice-panel-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.76rem;
-      font-weight: 800;
-      color: var(--text-muted);
-      letter-spacing: 0.5px;
-    }
-    .voice-status-pill {
-      font-family: monospace;
-      font-size: 0.72rem;
-      padding: 2px 6px;
-      border-radius: 4px;
-      background: rgba(255,255,255,0.06);
-      color: #A0AEC0;
-    }
-    .voice-status-pill.active {
-      background: rgba(255, 26, 26, 0.2);
-      color: #FF5252;
-      border: 1px solid #FF5252;
-    }
-    .voice-input {
-      width: 100%;
-      min-height: 54px;
-      background: #0B0E14;
-      border: 1px solid #23293B;
-      border-radius: 4px;
-      padding: 8px 10px;
       color: #E2E8F0;
-      font-family: inherit;
-      font-size: 0.88rem;
-      resize: vertical;
-      line-height: 1.35;
-    }
-    .voice-input:focus {
-      outline: none;
-      border-color: #00F5D4;
-      box-shadow: 0 0 6px rgba(0, 245, 212, 0.25);
-    }
-    .voice-actions {
-      display: flex;
-      gap: 8px;
-    }
-    .btn-evaluate {
-      flex: 1;
-      min-height: 38px;
-      background: #00F5D4;
-      color: #0B0E14;
-      font-weight: 800;
-      font-size: 0.84rem;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      display: flex;
       align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: background 0.15s;
-    }
-    .btn-evaluate:hover {
-      background: #20FFE2;
-    }
-    .btn-clear {
-      background: rgba(255,255,255,0.07);
-      color: #CBD5E0;
-      border: 1px solid #2A3042;
-      border-radius: 4px;
-      padding: 0 12px;
-      font-size: 0.8rem;
-      font-weight: 700;
+      justify-content: space-between;
       cursor: pointer;
-    }
-    .voice-presets {
-      display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      padding-bottom: 2px;
-    }
-    .preset-chip {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid #242938;
-      border-radius: 3px;
-      padding: 3px 8px;
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: #A0AEC0;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .preset-chip:hover {
-      background: rgba(255,255,255,0.1);
-      color: #FFF;
-      border-color: #3F475D;
-    }
-    .voice-eval-output {
-      display: none;
-      background: #090B0F;
-      border-left: 3px solid #00F5D4;
-      border-radius: 4px;
-      padding: 8px 10px;
-      font-size: 0.82rem;
-      line-height: 1.4;
+      transition: background 0.18s;
     }
 
-    /* Semantic Divergence Alert Banner */
+    .dormant-banner:hover {
+      background: rgba(71, 85, 105, 0.4);
+    }
+
     .divergence-banner {
       display: none;
       background: var(--divergence-alert-bg);
       border: 2px solid var(--divergence-alert);
-      border-radius: var(--border-radius-tactical);
-      padding: 14px;
+      border-radius: var(--radius-md);
+      padding: 14px 18px;
       color: #FFF;
-      animation: alertPulse 1.2s infinite;
       cursor: pointer;
+      animation: alertPulse 1.4s infinite ease-in-out;
+      box-shadow: 0 0 16px rgba(244, 63, 94, 0.35);
     }
+
     @keyframes alertPulse {
-      0%, 100% { border-color: var(--divergence-alert); box-shadow: 0 0 10px rgba(255,0,85,0.4); }
-      50% { border-color: #FFF; box-shadow: 0 0 20px rgba(255,0,85,0.8); }
+      0%, 100% {
+        border-color: var(--divergence-alert);
+        box-shadow: 0 0 12px rgba(244, 63, 94, 0.35);
+      }
+      50% {
+        border-color: #FFF;
+        box-shadow: 0 0 24px rgba(244, 63, 94, 0.7);
+      }
     }
+
     .divergence-title {
       font-weight: 900;
       font-size: 1.05rem;
       display: flex;
       align-items: center;
       gap: 8px;
-    }
-    .divergence-desc {
-      font-size: 0.85rem;
-      color: #FFB3C6;
-      margin-top: 4px;
+      color: #FFF;
     }
 
-    /* Casualty Feed */
-    .section-header {
+    .divergence-desc {
       font-size: 0.85rem;
+      color: #FECDD3;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    /* --------------------------------------------------------------------------
+       Tactical Multi-Column Grid Architecture
+       -------------------------------------------------------------------------- */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    @media (min-width: 960px) {
+      .dashboard-grid {
+        grid-template-columns: 1.18fr 0.82fr;
+        align-items: start;
+      }
+    }
+
+    @media (min-width: 1280px) {
+      .dashboard-grid {
+        grid-template-columns: 1.25fr 0.75fr;
+        gap: 20px;
+      }
+    }
+
+    .grid-column {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    @media (max-width: 640px) {
+      .tactical-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .brand-group {
+        justify-content: space-between;
+        width: 100%;
+      }
+      .header-actions {
+        display: flex;
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 8px;
+      }
+      .role-wrapper {
+        flex: 1 1 100%;
+        width: 100%;
+      }
+      .role-select {
+        flex: 1;
+        width: 100%;
+      }
+      .btn-header {
+        flex: 1 1 calc(50% - 6px);
+        min-width: 0;
+        justify-content: center;
+        text-align: center;
+      }
+      .btn-mode-toggle {
+        flex: 1 1 100%;
+      }
+      .op-details {
+        min-width: 0;
+        width: 100%;
+      }
+      .radar-container {
+        max-width: 100%;
+      }
+    }
+
+    /* --------------------------------------------------------------------------
+       Active Casualty Intake Card
+       -------------------------------------------------------------------------- */
+    .casualty-intake-card {
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: var(--shadow-card);
+    }
+
+    .patient-id-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .intake-eyebrow {
+      font-size: 0.72rem;
       font-weight: 800;
-      letter-spacing: 1px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.75px;
+    }
+
+    .phonetic-id {
+      font-size: 1.75rem;
+      font-weight: 900;
+      letter-spacing: 0.5px;
+      color: var(--text-primary);
+      line-height: 1.2;
+      margin-top: 2px;
+    }
+
+    .identicon-box {
+      width: 52px;
+      height: 52px;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      background: var(--bg-main);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: border-color 0.18s, transform 0.18s;
+    }
+
+    .identicon-box:hover {
+      border-color: var(--accent-primary);
+      transform: scale(1.04);
+    }
+
+    /* Two-Tap START Triage Grid */
+    .triage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    @media (min-width: 640px) and (max-width: 959px) {
+      .triage-grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+
+    .triage-btn {
+      min-height: 70px;
+      border-radius: var(--radius-md);
+      font-family: inherit;
+      font-weight: 900;
+      font-size: 1.2rem;
+      letter-spacing: 0.5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      border: none;
+      cursor: pointer;
+      color: #FFF;
+      transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+      position: relative;
+      user-select: none;
+    }
+
+    .triage-btn:hover {
+      transform: translateY(-2px);
+      filter: brightness(1.12);
+    }
+
+    .triage-btn:active {
+      transform: scale(0.97);
+      filter: brightness(1.25);
+    }
+
+    .triage-sub {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      opacity: 0.9;
+      margin-top: 2px;
+    }
+
+    .btn-red {
+      background: var(--triage-red);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .btn-red:hover {
+      box-shadow: 0 6px 18px rgba(239, 68, 68, 0.45);
+    }
+
+    .btn-yellow {
+      background: var(--triage-yellow);
+      color: #111820;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .btn-yellow:hover {
+      box-shadow: 0 6px 18px rgba(250, 204, 21, 0.45);
+    }
+
+    .btn-green {
+      background: var(--triage-green);
+      color: #0B0F14;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .btn-green:hover {
+      box-shadow: 0 6px 18px rgba(34, 197, 94, 0.45);
+    }
+
+    .btn-black {
+      background: var(--triage-black);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .btn-black:hover {
+      box-shadow: 0 6px 18px rgba(100, 116, 139, 0.45);
+    }
+
+    /* --------------------------------------------------------------------------
+       Push-To-Talk Voice Bar & Clinical Dictation Station
+       -------------------------------------------------------------------------- */
+    .ptt-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .ptt-bar {
+      min-height: 58px;
+      background: var(--bg-elevated);
+      border: 2px dashed rgba(255, 255, 255, 0.18);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-size: 0.96rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: var(--text-primary);
+      transition: all 0.18s ease;
+      user-select: none;
+      padding: 10px 16px;
+    }
+
+    .ptt-bar:hover {
+      border-color: var(--accent-primary);
+      background: rgba(32, 43, 56, 0.9);
+      color: var(--accent-primary);
+    }
+
+    .ptt-bar.recording {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: var(--triage-red);
+      color: #F87171;
+      animation: recordingPulse 1.2s infinite ease-in-out;
+    }
+
+    @keyframes recordingPulse {
+      0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+      50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+    }
+
+    .ptt-timer-badge {
+      display: none;
+      background: var(--triage-red);
+      color: #FFF;
+      padding: 3px 8px;
+      border-radius: var(--radius-full);
+      font-size: 0.74rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+
+    .ptt-bar.recording .ptt-timer-badge {
+      display: inline-block;
+    }
+
+    .voice-panel {
+      background: var(--bg-secondary);
+      border: var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .voice-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.74rem;
+      font-weight: 800;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+
+    .voice-status-pill {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: var(--radius-xs);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-secondary);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .voice-status-pill.active {
+      background: rgba(239, 68, 68, 0.18);
+      color: #F87171;
+      border-color: var(--triage-red);
+    }
+
+    .voice-input {
+      width: 100%;
+      min-height: 62px;
+      background: var(--bg-input);
+      border: var(--border-card);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      color: var(--text-primary);
+      font-size: 0.86rem;
+      resize: vertical;
+      line-height: 1.4;
+      outline: none;
+      transition: border-color 0.18s, box-shadow 0.18s;
+    }
+
+    .voice-input:focus {
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 2px rgba(0, 214, 185, 0.25);
+    }
+
+    .voice-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-evaluate {
+      flex: 1;
+      min-height: 42px;
+      background: var(--accent-primary);
+      color: #0B0F14;
+      font-weight: 900;
+      font-size: 0.84rem;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.18s;
+      letter-spacing: 0.3px;
+    }
+
+    .btn-evaluate:hover {
+      background: var(--accent-primary-hover);
+      box-shadow: 0 4px 14px rgba(0, 214, 185, 0.4);
+    }
+
+    .btn-clear {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-secondary);
+      border: var(--border-card);
+      border-radius: var(--radius-sm);
+      padding: 0 16px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-clear:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #FFF;
+    }
+
+    .voice-presets {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: thin;
+    }
+
+    .preset-chip {
+      background: var(--bg-elevated);
+      border: var(--border-subtle);
+      border-radius: var(--radius-xs);
+      padding: 4px 10px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .preset-chip:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #FFF;
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .voice-eval-output {
+      display: none;
+      background: var(--bg-input);
+      border-left: 3px solid var(--accent-primary);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    /* --------------------------------------------------------------------------
+       Triage Summary Metric Cards
+       -------------------------------------------------------------------------- */
+    .triage-summary-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+
+    .summary-card {
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      text-align: center;
+      transition: transform 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .summary-card:hover {
+      transform: translateY(-2px);
+    }
+
+    .summary-card-red {
+      background: var(--triage-red-bg);
+      border: 1px solid var(--triage-red-border);
+    }
+    .summary-card-red .summary-num { color: var(--triage-red); }
+
+    .summary-card-yellow {
+      background: var(--triage-yellow-bg);
+      border: 1px solid var(--triage-yellow-border);
+    }
+    .summary-card-yellow .summary-num { color: var(--triage-yellow); }
+
+    .summary-card-green {
+      background: var(--triage-green-bg);
+      border: 1px solid var(--triage-green-border);
+    }
+    .summary-card-green .summary-num { color: var(--triage-green); }
+
+    .summary-card-black {
+      background: var(--triage-black-bg);
+      border: 1px solid var(--triage-black-border);
+    }
+    .summary-card-black .summary-num { color: #CBD5E1; }
+
+    .summary-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      opacity: 0.9;
+    }
+
+    .summary-num {
+      font-size: 1.55rem;
+      font-weight: 900;
+      line-height: 1.2;
+      margin-top: 2px;
+    }
+
+    /* --------------------------------------------------------------------------
+       Active Sector Casualties Feed
+       -------------------------------------------------------------------------- */
+    .feed-container {
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: var(--shadow-card);
+    }
+
+    .feed-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .section-title {
+      font-size: 0.86rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
       text-transform: uppercase;
       color: var(--text-secondary);
-      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
+
     .casualty-list {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      max-height: 420px;
+      overflow-y: auto;
+      padding-right: 4px;
     }
+
     .casualty-item {
-      background: var(--bg-surface);
-      border-left: 6px solid var(--triage-red);
-      border-radius: 4px;
+      background: var(--bg-secondary);
+      border: var(--border-subtle);
+      border-left: 5px solid var(--triage-red);
+      border-radius: var(--radius-sm);
       padding: 10px 14px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      gap: 8px;
     }
+
+    .casualty-item:hover {
+      background: var(--bg-elevated);
+      transform: translateX(3px);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
     .cas-id {
-      font-weight: 800;
-      font-size: 1.1rem;
+      font-weight: 900;
+      font-size: 1.05rem;
+      letter-spacing: 0.3px;
     }
+
     .cas-vitals {
-      font-size: 0.78rem;
+      font-size: 0.76rem;
       color: var(--text-secondary);
       margin-top: 2px;
     }
 
-    /* Emergency Wipe Modal / Bottom Bar */
-    .footer-bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: rgba(9, 10, 13, 0.95);
-      backdrop-filter: blur(8px);
-      border-top: 1px solid rgba(255,255,255,0.1);
-      padding: 10px 16px;
+    .cas-badge {
+      font-weight: 900;
+      font-size: 0.8rem;
+      padding: 3px 8px;
+      border-radius: var(--radius-xs);
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+
+    /* --------------------------------------------------------------------------
+       Monte Carlo Search Heatmap (Phase 7) & Telemetry Sections
+       -------------------------------------------------------------------------- */
+    .collapsible-card {
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      box-shadow: var(--shadow-card);
+    }
+
+    .collapsible-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      max-width: 600px;
-      margin: 0 auto;
-    }
-    .wipe-btn {
-      background: transparent;
-      border: 1px solid rgba(255, 0, 85, 0.5);
-      color: #FF0055;
-      font-size: 0.75rem;
-      font-weight: 700;
-      padding: 8px 12px;
-      border-radius: 4px;
       cursor: pointer;
-      transition: all 0.2s ease;
-    }
-    .wipe-btn:hover {
-      background: rgba(255, 0, 85, 0.2);
-      border-color: #FF0055;
-      color: #FFF;
-      box-shadow: 0 0 10px rgba(255, 0, 85, 0.4);
+      user-select: none;
     }
 
-    /* Modal Styles */
+    .collapsible-title {
+      font-weight: 800;
+      font-size: 0.88rem;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-primary);
+    }
+
+    .toggle-indicator {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      font-weight: 700;
+      font-family: var(--font-mono);
+    }
+
+    .radar-container {
+      position: relative;
+      width: 100%;
+      height: 220px;
+      background: var(--bg-main);
+      border: var(--border-card);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .radar-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    .tele-tab {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-muted);
+      border-radius: var(--radius-xs);
+      padding: 6px 10px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .tele-tab:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-primary);
+    }
+
+    .tele-tab.active {
+      background: var(--accent-primary-tint);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
+    }
+
+    .tele-card {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-left: 3px solid var(--accent-primary);
+      border-radius: var(--radius-xs);
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      background: var(--bg-secondary);
+      font-size: 0.78rem;
+    }
+
+    .tele-field {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+
+    .tele-field span {
+      color: var(--text-muted);
+    }
+
+    .tele-field strong {
+      color: var(--text-primary);
+    }
+
+    /* --------------------------------------------------------------------------
+       Bottom Tactical Status Bar
+       -------------------------------------------------------------------------- */
+    .footer-bar {
+      margin-top: auto;
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 12px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .footer-status-text {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .wipe-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--triage-red);
+      color: var(--triage-red);
+      font-size: 0.76rem;
+      font-weight: 900;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.18s ease;
+      letter-spacing: 0.5px;
+    }
+
+    .wipe-btn:hover {
+      background: var(--triage-red);
+      color: #FFF;
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
+    }
+
+    /* --------------------------------------------------------------------------
+       Tactical Toast System
+       -------------------------------------------------------------------------- */
+    .toast-container {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 400px;
+      width: calc(100% - 32px);
+      pointer-events: none;
+    }
+
+    .toast-item {
+      pointer-events: auto;
+      background: var(--bg-elevated);
+      border: var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 12px 16px;
+      color: var(--text-primary);
+      box-shadow: var(--shadow-elevated);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 0.84rem;
+      line-height: 1.4;
+      animation: toastSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      border-left: 4px solid var(--accent-primary);
+    }
+
+    @keyframes toastSlideIn {
+      from {
+        opacity: 0;
+        transform: translateX(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .toast-item.toast-success { border-left-color: var(--triage-green); }
+    .toast-item.toast-warning { border-left-color: var(--triage-yellow); }
+    .toast-item.toast-error { border-left-color: var(--triage-red); }
+    .toast-item.toast-info { border-left-color: var(--accent-secondary); }
+
+    .toast-icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .toast-msg {
+      flex: 1;
+      word-break: break-word;
+    }
+
+    .toast-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      padding: 2px 4px;
+      margin-left: 4px;
+      flex-shrink: 0;
+    }
+
+    .toast-close:hover {
+      color: #FFF;
+    }
+
+    /* --------------------------------------------------------------------------
+       Modal Overlays & Dialogs
+       -------------------------------------------------------------------------- */
     .modal-overlay {
       display: none;
       position: fixed;
@@ -497,183 +1211,198 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(11, 15, 20, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       z-index: 1000;
       align-items: center;
       justify-content: center;
       padding: 16px;
     }
+
     .modal-box {
-      background: var(--bg-surface);
-      border: 2px solid var(--divergence-alert);
-      border-radius: var(--border-radius-tactical);
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
       padding: 20px;
-      max-width: 480px;
+      max-width: 540px;
       width: 100%;
-      color: #FFF;
+      color: var(--text-primary);
+      box-shadow: var(--shadow-elevated);
+      animation: modalFadeIn 0.2s ease-out;
     }
+
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
     .conflict-row {
-      background: rgba(255,255,255,0.05);
-      padding: 10px;
-      border-radius: 4px;
+      background: var(--bg-secondary);
+      border: var(--border-subtle);
+      padding: 12px;
+      border-radius: var(--radius-sm);
       margin: 10px 0;
       font-size: 0.85rem;
     }
+
     .resolve-btn {
       width: 100%;
-      min-height: 52px;
+      min-height: 48px;
       background: var(--triage-red);
       color: #FFF;
       border: none;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       font-weight: 800;
-      font-size: 1rem;
+      font-size: 0.95rem;
       cursor: pointer;
-      margin-top: 12px;
+      margin-top: 10px;
+      transition: filter 0.15s;
     }
-    .tele-tab {
-      background: transparent;
-      border: 1px solid #2A2E3D;
-      color: var(--text-muted);
-      border-radius: 4px;
-      padding: 6px 10px;
-      font-size: 0.72rem;
-      font-weight: 700;
-      cursor: pointer;
-      white-space: nowrap;
+
+    .resolve-btn:hover {
+      filter: brightness(1.15);
     }
-    .tele-tab:hover {
-      background: rgba(255,255,255,0.05);
-    }
-    .tele-tab.active {
-      background: rgba(0, 245, 212, 0.12);
-      border-color: #00F5D4;
-      color: #00F5D4;
-    }
-    .tele-card {
-      border: 1px solid #1F2433;
-      border-left: 3px solid #00F5D4;
-      border-radius: 4px;
-      padding: 8px;
-      margin-bottom: 8px;
-      background: #0E1118;
-      font-family: monospace;
-    }
-    .tele-field {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 3px;
-    }
-    .tele-field span {
-      color: #8C92A4;
-    }
-    .tele-field strong {
-      color: #E2E8F0;
-    }
+
     /* Dossier Modal */
     .dossier-box {
-      background: #0D111A;
-      border: 2px solid rgba(255, 255, 255, 0.2);
-      border-radius: var(--border-radius-tactical);
-      padding: 18px;
-      max-width: 560px;
+      background: var(--bg-card);
+      border: var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      max-width: 640px;
       width: 100%;
       max-height: 90vh;
       overflow-y: auto;
-      color: #FFF;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-elevated);
     }
+
     .dossier-nav {
       display: flex;
-      gap: 4px;
+      gap: 6px;
       overflow-x: auto;
-      border-bottom: 1px solid #1F2839;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
       padding-bottom: 8px;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
+
     .dossier-tab-btn {
       background: transparent;
-      border: 1px solid #2B3547;
-      color: #94A3B8;
-      font-size: 0.72rem;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-secondary);
+      font-size: 0.74rem;
       font-weight: 700;
-      padding: 5px 10px;
-      border-radius: 4px;
+      padding: 6px 12px;
+      border-radius: var(--radius-xs);
       cursor: pointer;
       white-space: nowrap;
+      transition: all 0.15s;
     }
+
     .dossier-tab-btn.active {
-      background: rgba(0, 245, 212, 0.15);
-      border-color: #00F5D4;
-      color: #00F5D4;
+      background: var(--accent-primary-tint);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
     }
+
     .dossier-card {
-      background: #131824;
-      border: 1px solid #1F2839;
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 8px;
+      background: var(--bg-secondary);
+      border: var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      margin-bottom: 10px;
     }
+
     .dossier-action-btn {
-      background: rgba(255,255,255,0.08);
-      border: 1px solid #334155;
-      color: #F8FAFC;
-      padding: 6px 10px;
-      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border: var(--border-card);
+      color: var(--text-primary);
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
       font-size: 0.75rem;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.15s;
     }
+
     .dossier-action-btn:hover {
-      background: rgba(255,255,255,0.18);
-      border-color: #00F5D4;
-    }
-    /* Radar Search Heatmap */
-    .radar-container {
-      position: relative;
-      width: 100%;
-      height: 220px;
-      background: #080B11;
-      border: 1px solid #1A2333;
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      margin-top: 8px;
-    }
-    .radar-canvas {
-      width: 100%;
-      height: 100%;
+      background: var(--accent-primary-tint);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
     }
   </style>
 </head>
 <body>
 
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
   <div class="app-container">
-    <!-- Top Tactical Header -->
-    <header class="tactical-bar">
-      <div class="brand-title">
-        <div class="pulse-dot" id="modePulseDot"></div>
-        PEERSCRIBE <span style="font-size: 0.7rem; color: #00F5D4; border: 1px solid #00F5D4; padding: 1px 6px; border-radius: 4px; margin-left: 4px; font-weight: 800;">v1.0</span>
+    <!-- Top Tactical Header Bar -->
+    <header class="tactical-header">
+      <div class="brand-group">
+        <div class="pulse-dot" id="modePulseDot" title="Tactical mesh radio link active"></div>
+        <div class="brand-title">
+          PEERSCRIBE
+          <span class="brand-version">v1.0</span>
+        </div>
       </div>
-      <div style="display: flex; gap: 8px; align-items: center;">
-        <button type="button" id="btnCheckDeltaUpdates" onclick="checkDeltaUpdates()" style="background: rgba(0,245,212,0.15); border: 1px solid #00F5D4; color: #00F5D4; border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="Check for in-place differential updates">
+
+      <div class="header-actions">
+        <!-- Role Selector -->
+        <div class="role-wrapper" title="Change Responder RBAC Profile">
+          <label for="roleSelector" class="role-label">ROLE:</label>
+          <select id="roleSelector" class="role-select" onchange="changeResponderRole(this.value)">
+            <option value="MEDICAL_RESPONDER">⚕️ MEDICAL RESPONDER</option>
+            <option value="COORDINATOR">📋 COORDINATOR</option>
+            <option value="PARTICIPANT">👤 PARTICIPANT</option>
+            <option value="TRANSPORT">🚑 TRANSPORT</option>
+            <option value="SUPPORT">🛠️ SUPPORT</option>
+          </select>
+        </div>
+
+        <!-- Operations Management Trigger -->
+        <button type="button" id="btnManageOps" class="btn-header btn-header-ops" onclick="openOperationsModal()" title="Manage Tactical Operations & Incidents">
+          📋 OPS
+        </button>
+
+        <!-- Mesh Pairing & LAN Sync Trigger -->
+        <button type="button" id="btnMeshPairing" class="btn-header btn-header-mesh" onclick="openMeshPairingModal()" title="Pair with Nearby Mobile Devices & LAN Sync">
+          🔗 PAIR DEVICE
+        </button>
+
+        <!-- Differential Delta Updates -->
+        <button type="button" id="btnCheckDeltaUpdates" class="btn-header btn-header-delta" onclick="checkDeltaUpdates()" title="Check for in-place differential updates">
           ⚡ DELTA UPDATE
         </button>
-        <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()" title="Click to cycle modes: FIELD → EMERGENCY → DORMANT">FIELD</div>
+
+        <!-- Operational Mode Cycling Badge -->
+        <div id="modeBadge" class="mode-badge" onclick="toggleOperationalMode()" title="Click to cycle modes: FIELD → EMERGENCY → DORMANT">
+          FIELD
+        </div>
       </div>
     </header>
 
     <!-- Operation Context Card -->
     <section class="operation-card">
-      <div style="flex: 1;">
-        <div class="op-name">District 4 Disaster Response #001</div>
-        <div class="op-meta">Sector Geohash: <strong style="color:#FFF;">u15ek200</strong> | 27.7172° N, 85.3240° E</div>
+      <div class="op-details">
+        <div class="op-title-row">
+          <span class="op-name" id="opTitleDisplay">District 4 Disaster Response #001</span>
+          <span class="op-badge-active" id="opStatusBadge">ACTIVE</span>
+        </div>
+        <div class="op-meta">
+          <span>Sector Geohash: <strong id="sectorGeohashDisplay">u15ek200</strong></span>
+          <span>•</span>
+          <span>GPS: <strong id="gpsCoordsDisplay">27.7172° N, 85.3240° E</strong></span>
+        </div>
       </div>
-      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
-        <div class="mesh-badge" id="meshStatus">Mesh Node: local | Mode: FIELD</div>
+
+      <div class="op-controls">
+        <div class="mesh-badge" id="meshStatus" onclick="openMeshPairingModal()" style="cursor: pointer;" title="Click to Open Mesh Pairing & Device Sync">
+          <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent-primary);"></span>
+          Mesh Node: local | Mode: FIELD
+        </div>
         <div class="mode-pills-row">
           <button type="button" class="mode-pill active-mode-field" id="pillField" onclick="setMode('FIELD')">FIELD</button>
           <button type="button" class="mode-pill" id="pillEmergency" onclick="setMode('EMERGENCY')">EMERGENCY</button>
@@ -698,273 +1427,428 @@
       </div>
     </div>
 
-    <!-- Active Casualty Intake Station -->
-    <section class="casualty-intake-card">
-      <div class="patient-id-row">
-        <div>
-          <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">Active Casualty</span>
-          <div class="phonetic-id" id="activePatientId">RED-PANTHER-04</div>
-          <div id="activePatientSubtext" style="font-size: 0.74rem; color: #94A3B8; margin-top: 2px; font-family: monospace;">Awaiting evaluation</div>
-          <div id="activePatientInjuries" style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;"></div>
-          <button type="button" class="dossier-action-btn" onclick="openCasualtyDossier()" style="margin-top: 6px; display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem;">
-            📋 Open Clinical Dossier &amp; Chart
-          </button>
-        </div>
-        <div class="identicon-box" id="activeIdenticon" onclick="openCasualtyDossier()" style="cursor: pointer;" title="Click to open clinical dossier">
-          <!-- 4x4 Identicon SVG -->
-          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#121316"/><rect x="0" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="24" y="0" width="12" height="12" fill="#FF1A1A"/><rect x="12" y="12" width="12" height="12" fill="#FF1A1A"/><rect x="36" y="24" width="12" height="12" fill="#FF1A1A"/><rect x="0" y="36" width="12" height="12" fill="#FF1A1A"/></svg>
-        </div>
-      </div>
-
-      <!-- Two-Tap START Triage Buttons -->
-      <div class="triage-grid">
-        <button class="triage-btn btn-red" onclick="assignTriage('RED')">
-          RED
-          <span class="triage-sub">IMMEDIATE</span>
-        </button>
-        <button class="triage-btn btn-yellow" onclick="assignTriage('YELLOW')">
-          YELLOW
-          <span class="triage-sub">DELAYED</span>
-        </button>
-        <button class="triage-btn btn-green" onclick="assignTriage('GREEN')">
-          GREEN
-          <span class="triage-sub">MINOR</span>
-        </button>
-        <button class="triage-btn btn-black" onclick="assignTriage('BLACK')">
-          BLACK
-          <span class="triage-sub">EXPECTANT</span>
-        </button>
-      </div>
-
-      <!-- Push to Talk Voice & Clinical Dictation Station -->
-      <div class="ptt-container">
-        <div class="ptt-bar" id="pttButton" onclick="toggleVoiceRecording()">
-          <span id="pttIcon">🎤</span>
-          <span id="pttText">Push To Talk Clinical Observation</span>
-          <span class="ptt-timer-badge" id="pttTimerBadge">00:00</span>
-        </div>
-
-        <!-- Live Dictation & Manual Override Box -->
-        <div class="voice-panel" id="voicePanel">
-          <div class="voice-panel-header">
-            <span>EDGE ASR &amp; START CLINICAL EXTRACTOR</span>
-            <span class="voice-status-pill" id="voiceStatusPill">MIC STANDBY</span>
-          </div>
-
-          <!-- Live Microphone VU Meter & Audio Decibel Indicator -->
-          <div id="audioVisualizerRow" style="display: none; align-items: center; gap: 8px; background: #0A0D14; border: 1px solid #1E2433; border-radius: 4px; padding: 6px 10px; font-family: monospace; font-size: 0.72rem;">
-            <span style="color: #00F5D4; font-weight: 800; display: flex; align-items: center; gap: 4px;">
-              <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #00F5D4; box-shadow: 0 0 6px #00F5D4;"></span>
-              MIC SIGNAL:
-            </span>
-            <div style="flex: 1; height: 10px; background: #131824; border-radius: 2px; overflow: hidden; position: relative;">
-              <div id="vuMeterBar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #00E676 0%, #FFD600 70%, #FF1A1A 100%); transition: width 0.05s ease;"></div>
+    <!-- Responsive Tactical Grid Layout -->
+    <main class="dashboard-grid">
+      <!-- ====================================================================
+           Left Column: Active Casualty Intake, Two-Tap Triage, Voice & AI
+           ==================================================================== -->
+      <div class="grid-column">
+        <!-- Active Casualty Intake Card -->
+        <section class="casualty-intake-card">
+          <div class="patient-id-row">
+            <div>
+              <div class="intake-eyebrow">Active Casualty Intake</div>
+              <div class="phonetic-id" id="activePatientId">RED-PANTHER-04</div>
+              <div id="activePatientSubtext" style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; font-family: var(--font-mono);">Awaiting evaluation</div>
+              <div id="activePatientInjuries" style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;"></div>
+              <button type="button" class="dossier-action-btn" onclick="openCasualtyDossier()" style="margin-top: 8px; display: inline-flex; align-items: center; gap: 6px;">
+                📋 Open Clinical Dossier &amp; Chart
+              </button>
             </div>
-            <span id="vuMeterDb" style="color: #A0AEC0; font-size: 0.7rem; min-width: 60px; text-align: right;">LISTENING</span>
+            <div class="identicon-box" id="activeIdenticon" onclick="openCasualtyDossier()" style="cursor: pointer;" title="Click to view casualty clinical dossier">
+              <!-- Default Tactical Identicon SVG -->
+              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+                <rect width="48" height="48" fill="#111820"/>
+                <rect x="0" y="0" width="12" height="12" fill="#EF4444"/>
+                <rect x="24" y="0" width="12" height="12" fill="#EF4444"/>
+                <rect x="12" y="12" width="12" height="12" fill="#EF4444"/>
+                <rect x="36" y="24" width="12" height="12" fill="#EF4444"/>
+                <rect x="0" y="36" width="12" height="12" fill="#EF4444"/>
+              </svg>
+            </div>
           </div>
 
-          <textarea 
-            id="voiceTranscriptInput" 
-            class="voice-input" 
-            placeholder="Live speech transcript streams here. You can also edit or type clinical observations (e.g. 'Adult victim, respiration rate 34, radial pulse absent, altered mental status')..."
-            rows="2"
-          ></textarea>
-
-          <div class="voice-actions">
-            <button class="btn-evaluate" id="btnEvaluateSpeech" onclick="evaluateCurrentTranscript()">
-              ⚡ Evaluate &amp; Apply START Triage
+          <!-- Two-Tap START/JumpSTART Triage Buttons (Fitts's Law Optimized) -->
+          <div class="triage-grid">
+            <button class="triage-btn btn-red" onclick="assignTriage('RED')">
+              RED
+              <span class="triage-sub">IMMEDIATE</span>
             </button>
-            <button class="btn-clear" onclick="clearVoiceInput()">Clear</button>
+            <button class="triage-btn btn-yellow" onclick="assignTriage('YELLOW')">
+              YELLOW
+              <span class="triage-sub">DELAYED</span>
+            </button>
+            <button class="triage-btn btn-green" onclick="assignTriage('GREEN')">
+              GREEN
+              <span class="triage-sub">MINOR</span>
+            </button>
+            <button class="triage-btn btn-black" onclick="assignTriage('BLACK')">
+              BLACK
+              <span class="triage-sub">EXPECTANT</span>
+            </button>
           </div>
 
-          <div class="voice-presets">
-            <span style="font-size: 0.7rem; color: #718096; align-self: center; font-weight: 700;">PRESETS:</span>
-            <div class="preset-chip" onclick="applyPreset('Adult patient, respiration rate 34, radial pulse absent, altered mental status')">🔴 Immediate (RR 34, Pulse Absent)</div>
-            <div class="preset-chip" onclick="applyPreset('Adult patient, cannot walk, respiration rate 20, radial pulse present, follows commands')">🟡 Delayed (RR 20, Pulse Present)</div>
-            <div class="preset-chip" onclick="applyPreset('Patient is ambulatory, walking wounded, alert and oriented')">🟢 Minor (Ambulatory)</div>
-            <div class="preset-chip" onclick="applyPreset('Patient not breathing, airway opened, breathing not resumed')">⚫ Expectant (Apneic)</div>
-            <div class="preset-chip" onclick="applyPreset('Pediatric patient, 6 year old, respiratory rate 12, weak pulse')">🧒 JumpSTART Child (RR 12)</div>
+          <!-- Push-To-Talk Voice Bar & Clinical Dictation Station -->
+          <div class="ptt-container">
+            <div class="ptt-bar" id="pttButton" onclick="toggleVoiceRecording()">
+              <span id="pttIcon">🎤</span>
+              <span id="pttText">Push To Talk Clinical Observation</span>
+              <span class="ptt-timer-badge" id="pttTimerBadge">00:00</span>
+            </div>
+
+            <!-- Dictation Box & START Extractor -->
+            <div class="voice-panel" id="voicePanel">
+              <div class="voice-panel-header">
+                <span>EDGE ASR &amp; START CLINICAL EXTRACTOR</span>
+                <span class="voice-status-pill" id="voiceStatusPill">MIC STANDBY</span>
+              </div>
+
+              <!-- Live Microphone VU Meter & Audio Indicator -->
+              <div id="audioVisualizerRow" style="display: none; align-items: center; gap: 8px; background: var(--bg-input); border: var(--border-subtle); border-radius: var(--radius-xs); padding: 6px 10px; font-family: var(--font-mono); font-size: 0.72rem;">
+                <span style="color: var(--accent-primary); font-weight: 800; display: flex; align-items: center; gap: 4px;">
+                  <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-primary); box-shadow: 0 0 6px var(--accent-primary);"></span>
+                  MIC SIGNAL:
+                </span>
+                <div style="flex: 1; height: 10px; background: var(--bg-secondary); border-radius: 2px; overflow: hidden; position: relative;">
+                  <div id="vuMeterBar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #22C55E 0%, #FACC15 70%, #EF4444 100%); transition: width 0.05s ease;"></div>
+                </div>
+                <span id="vuMeterDb" style="color: var(--text-secondary); font-size: 0.7rem; min-width: 60px; text-align: right;">LISTENING</span>
+              </div>
+
+              <textarea 
+                id="voiceTranscriptInput" 
+                class="voice-input" 
+                placeholder="Live speech transcript streams here. You can also edit or type clinical observations (e.g. 'Adult victim, respiration rate 34, radial pulse absent, altered mental status')..."
+                rows="2"
+              ></textarea>
+
+              <div class="voice-actions">
+                <button class="btn-evaluate" id="btnEvaluateSpeech" onclick="evaluateCurrentTranscript()">
+                  ⚡ Evaluate &amp; Apply START Triage
+                </button>
+                <button class="btn-clear" onclick="clearVoiceInput()">Clear</button>
+              </div>
+
+              <div class="voice-presets">
+                <span style="font-size: 0.7rem; color: var(--text-muted); align-self: center; font-weight: 800;">PRESETS:</span>
+                <div class="preset-chip" onclick="applyPreset('Adult patient, respiration rate 34, radial pulse absent, altered mental status')">🔴 Immediate (RR 34, Pulse Absent)</div>
+                <div class="preset-chip" onclick="applyPreset('Adult patient, cannot walk, respiration rate 20, radial pulse present, follows commands')">🟡 Delayed (RR 20, Pulse Present)</div>
+                <div class="preset-chip" onclick="applyPreset('Patient is ambulatory, walking wounded, alert and oriented')">🟢 Minor (Ambulatory)</div>
+                <div class="preset-chip" onclick="applyPreset('Patient not breathing, airway opened, breathing not resumed')">⚫ Expectant (Apneic)</div>
+                <div class="preset-chip" onclick="applyPreset('Pediatric patient, 6 year old, respiratory rate 12, weak pulse')">🧒 JumpSTART Child (RR 12)</div>
+              </div>
+
+              <!-- Structured Clinical Extractor Live Result Card -->
+              <div class="voice-eval-output" id="voiceEvalOutput"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Probabilistic Location Recovery & Monte Carlo Search Heatmap (Phase 7) -->
+        <section class="collapsible-card location-section">
+          <div class="collapsible-header" onclick="toggleLocationSection()">
+            <div class="collapsible-title">
+              <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-primary); box-shadow: 0 0 6px var(--accent-primary);"></span>
+              SEARCH &amp; RECOVERY HEATMAP (PHASE 7)
+            </div>
+            <div id="locationToggleText" class="toggle-indicator">[SHOW ▼]</div>
           </div>
 
-          <!-- Structured Clinical Extractor Live Result Card -->
-          <div class="voice-eval-output" id="voiceEvalOutput"></div>
+          <div id="locationBody" style="margin-top: 14px; display: none;">
+            <div style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 10px; font-family: var(--font-mono); line-height: 1.4;">
+              Sequential Monte Carlo (Particle Filter): Estimates search contours around LKP (27.7172° N, 85.3240° E) with kinematic Brownian motion &amp; Bayesian peer sighting contraction.
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; font-family: var(--font-mono); font-size: 0.74rem;">
+              <div style="background: var(--bg-secondary); border: 1px solid var(--triage-red-border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+                <div style="color: #F87171; font-weight: 800;">90% MASS</div>
+                <div id="radius90Text" style="font-size: 1.15rem; font-weight: 900; color: var(--triage-red); margin-top: 2px;">-- m</div>
+              </div>
+              <div style="background: var(--bg-secondary); border: 1px solid var(--triage-yellow-border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+                <div style="color: #FDE047; font-weight: 800;">75% MASS</div>
+                <div id="radius75Text" style="font-size: 1.15rem; font-weight: 900; color: var(--triage-yellow); margin-top: 2px;">-- m</div>
+              </div>
+              <div style="background: var(--bg-secondary); border: 1px solid rgba(0, 214, 185, 0.4); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+                <div style="color: #5EEAD4; font-weight: 800;">50% MASS</div>
+                <div id="radius50Text" style="font-size: 1.15rem; font-weight: 900; color: var(--accent-primary); margin-top: 2px;">-- m</div>
+              </div>
+            </div>
+
+            <!-- Radar Heatmap Canvas -->
+            <div class="radar-container">
+              <canvas id="searchRadarCanvas" width="560" height="220" class="radar-canvas"></canvas>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; flex-wrap: wrap;">
+              <button class="dossier-action-btn" style="background: var(--accent-primary-tint); border-color: var(--accent-primary); color: var(--accent-primary); flex: 1;" onclick="triggerSightingObservation()">
+                📡 Ingest Opportunistic Peer Sighting (Bayesian Contraction)
+              </button>
+              <div id="sightingFeedback" style="font-size: 0.74rem; color: var(--accent-primary); font-family: var(--font-mono);"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ====================================================================
+           Right Column: Triage Metrics, Sector Casualties Feed, Mesh Telemetry
+           ==================================================================== -->
+      <div class="grid-column">
+        <!-- Triage Summary Metric Cards -->
+        <div id="triageSummaryBar" class="triage-summary-bar">
+          <div class="summary-card summary-card-red">
+            <span class="summary-label" style="color: #F87171;">RED</span>
+            <span id="countRed" class="summary-num">0</span>
+          </div>
+          <div class="summary-card summary-card-yellow">
+            <span class="summary-label" style="color: #FDE047;">YELLOW</span>
+            <span id="countYellow" class="summary-num">0</span>
+          </div>
+          <div class="summary-card summary-card-green">
+            <span class="summary-label" style="color: #86EFAC;">GREEN</span>
+            <span id="countGreen" class="summary-num">0</span>
+          </div>
+          <div class="summary-card summary-card-black">
+            <span class="summary-label" style="color: #94A3B8;">BLACK</span>
+            <span id="countBlack" class="summary-num">0</span>
+          </div>
         </div>
-      </div>
-    </section>
 
-    <!-- Triage Summary Count Bar -->
-    <div id="triageSummaryBar" style="display: flex; gap: 6px; margin-bottom: 2px;">
-      <div style="flex:1; background: rgba(255,26,26,0.18); border: 1px solid rgba(255,26,26,0.4); border-radius: 4px; padding: 5px 10px; text-align: center;">
-        <div style="font-size: 0.68rem; color: #FF7070; font-weight: 800; letter-spacing: 0.5px;">RED</div>
-        <div id="countRed" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-red);">0</div>
-      </div>
-      <div style="flex:1; background: rgba(255,184,0,0.18); border: 1px solid rgba(255,184,0,0.4); border-radius: 4px; padding: 5px 10px; text-align: center;">
-        <div style="font-size: 0.68rem; color: #FFCB47; font-weight: 800; letter-spacing: 0.5px;">YELLOW</div>
-        <div id="countYellow" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-yellow);">0</div>
-      </div>
-      <div style="flex:1; background: rgba(0,230,118,0.12); border: 1px solid rgba(0,230,118,0.35); border-radius: 4px; padding: 5px 10px; text-align: center;">
-        <div style="font-size: 0.68rem; color: #4FFFAA; font-weight: 800; letter-spacing: 0.5px;">GREEN</div>
-        <div id="countGreen" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-green);">0</div>
-      </div>
-      <div style="flex:1; background: rgba(80,86,100,0.3); border: 1px solid rgba(80,86,100,0.5); border-radius: 4px; padding: 5px 10px; text-align: center;">
-        <div style="font-size: 0.68rem; color: #A0AEC0; font-weight: 800; letter-spacing: 0.5px;">BLACK</div>
-        <div id="countBlack" style="font-size: 1.4rem; font-weight: 900; color: var(--triage-black);">0</div>
-      </div>
-    </div>
+        <!-- Active Sector Casualties Feed -->
+        <section class="feed-container">
+          <div class="feed-header-row">
+            <div class="section-title">
+              <span>Sector Casualties</span>
+              <span id="casualtyFeedCountBadge" style="font-size: 0.68rem; background: var(--bg-elevated); color: var(--accent-secondary); padding: 1px 6px; border-radius: var(--radius-xs);">0 Total</span>
+            </div>
+            <button onclick="createNewIntakePatient()" class="dossier-action-btn" style="background: var(--accent-primary-tint); border-color: var(--accent-primary); color: var(--accent-primary); font-size: 0.74rem; font-weight: 800;">
+              + Intake New Patient
+            </button>
+          </div>
 
-    <!-- Casualty Feed -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; margin-bottom: 6px;">
-      <div class="section-header" style="margin-top: 0;">Active Sector Casualties (Sorted by Severity)</div>
-      <button onclick="createNewIntakePatient()" style="background: rgba(255,255,255,0.08); border: 1px solid #2B3347; color: #00F5D4; font-size: 0.74rem; font-weight: 800; border-radius: 4px; padding: 4px 8px; cursor: pointer;">
-        + Intake New Patient
+          <div class="casualty-list" id="casualtyList">
+            <div class="casualty-item" style="border-color: var(--triage-red);">
+              <div>
+                <div class="cas-id" style="color: var(--triage-red);">RED-PANTHER-04</div>
+                <div class="cas-vitals">RR: 34/min | Radial Pulse: Absent | Mental: Altered | 1m ago</div>
+              </div>
+              <div class="cas-badge" style="background: var(--triage-red-bg); color: var(--triage-red);">IMM</div>
+            </div>
+            <div class="casualty-item" style="border-color: var(--triage-yellow);">
+              <div>
+                <div class="cas-id" style="color: var(--triage-yellow);">YELLOW-OTTER-12</div>
+                <div class="cas-vitals">RR: 20/min | Radial Pulse: Normal | Mental: Alert | 4m ago</div>
+              </div>
+              <div class="cas-badge" style="background: var(--triage-yellow-bg); color: var(--triage-yellow);">DEL</div>
+            </div>
+            <div class="casualty-item" style="border-color: var(--triage-green);">
+              <div>
+                <div class="cas-id" style="color: var(--triage-green);">GREEN-WOLF-02</div>
+                <div class="cas-vitals">Ambulatory | Minor laceration left forearm | 9m ago</div>
+              </div>
+              <div class="cas-badge" style="background: var(--triage-green-bg); color: var(--triage-green);">MIN</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Real-Time Tactical Mesh Telemetry & BitChat Wire Inspector -->
+        <section class="collapsible-card telemetry-section">
+          <div class="collapsible-header" onclick="toggleTelemetry()">
+            <div class="collapsible-title">
+              <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--triage-green); box-shadow: 0 0 6px var(--triage-green);"></span>
+              LIVE MESH TELEMETRY &amp; PACKET INSPECTOR
+            </div>
+            <div id="telemetryToggleText" class="toggle-indicator">[HIDE ▲]</div>
+          </div>
+
+          <div id="telemetryBody" style="margin-top: 14px;">
+            <div style="display: flex; gap: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px; overflow-x: auto; scrollbar-width: thin;">
+              <button class="tele-tab active" id="tabWire" onclick="switchTeleTab('wire')">BitChat Wire (<span id="wireCount">0</span>)</button>
+              <button class="tele-tab" id="tabAudit" onclick="switchTeleTab('audit')">SQLite WAL (<span id="auditCount">0</span>)</button>
+              <button class="tele-tab" id="tabDtn" onclick="switchTeleTab('dtn')">DTN Outbox (<span id="dtnCount">0</span>)</button>
+              <button class="tele-tab" id="tabAi" onclick="switchTeleTab('ai')">Edge AI (<span id="aiCount">0</span>)</button>
+              <button class="tele-tab" id="tabNostr" onclick="switchTeleTab('nostr')">Nostr 20042</button>
+              <button class="tele-tab" id="tabConsole" onclick="switchTeleTab('console')">Console</button>
+            </div>
+
+            <div id="teleContent" style="margin-top: 10px; font-family: var(--font-mono); font-size: 0.78rem; max-height: 240px; overflow-y: auto; background: var(--bg-input); padding: 12px; border-radius: var(--radius-sm); border: var(--border-subtle);">
+              <div style="color: var(--text-muted);">Awaiting live mesh sync packets...</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Bottom Tactical Status Bar (Normal Document Flow, No Screen Overlap) -->
+    <footer class="footer-bar">
+      <div id="footerStatus" class="footer-status-text">
+        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-primary); box-shadow: 0 0 6px var(--accent-primary);"></span>
+        BLE Mesh: <strong style="color: var(--text-primary);">Initializing...</strong>
+      </div>
+      <button class="wipe-btn" onclick="triggerEmergencyWipe()" title="Scrub operational keys and sanitize node">
+        EMERGENCY WIPE
       </button>
-    </div>
-    <div class="casualty-list" id="casualtyList">
-      <div class="casualty-item" style="border-color: var(--triage-red);">
-        <div>
-          <div class="cas-id" style="color: var(--triage-red);">RED-PANTHER-04</div>
-          <div class="cas-vitals">RR: 34/min | Radial Pulse: Absent | Mental: Altered | 1m ago</div>
-        </div>
-        <div style="font-weight: 800; color: var(--triage-red);">IMM</div>
-      </div>
-      <div class="casualty-item" style="border-color: var(--triage-yellow);">
-        <div>
-          <div class="cas-id" style="color: var(--triage-yellow);">YELLOW-OTTER-12</div>
-          <div class="cas-vitals">RR: 20/min | Radial Pulse: Normal | Mental: Alert | 4m ago</div>
-        </div>
-        <div style="font-weight: 800; color: var(--triage-yellow);">DEL</div>
-      </div>
-      <div class="casualty-item" style="border-color: var(--triage-green);">
-        <div>
-          <div class="cas-id" style="color: var(--triage-green);">GREEN-WOLF-02</div>
-          <div class="cas-vitals">Ambulatory | Minor laceration left forearm | 9m ago</div>
-        </div>
-        <div style="font-weight: 800; color: var(--triage-green);">MIN</div>
-      </div>
-    </div>
-
-    <!-- Probabilistic Location Recovery & Monte Carlo Search Heatmap (Phase 7) -->
-    <section class="location-section" style="background: var(--bg-surface); border: var(--border-thick); border-radius: var(--border-radius-tactical); padding: 12px; margin-top: 14px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleLocationSection()">
-        <div style="font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
-          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #00F5D4; box-shadow: 0 0 6px #00F5D4;"></span>
-          SEARCH &amp; RECOVERY HEATMAP (PHASE 7)
-        </div>
-        <div id="locationToggleText" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 700;">[SHOW ▼]</div>
-      </div>
-
-      <div id="locationBody" style="margin-top: 12px; display: none;">
-        <div style="font-size: 0.74rem; color: #94A3B8; margin-bottom: 8px; font-family: monospace;">
-          Sequential Monte Carlo (Particle Filter): Estimates search contours around LKP (27.7172° N, 85.3240° E) with kinematic Brownian motion &amp; Bayesian peer sighting contraction.
-        </div>
-        
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; font-family: monospace; font-size: 0.72rem;">
-          <div style="background: #0E131E; border: 1px solid rgba(255,26,26,0.35); border-radius: 4px; padding: 6px; text-align: center;">
-            <div style="color: #FF7070; font-weight: 700;">90% MASS</div>
-            <div id="radius90Text" style="font-size: 1.15rem; font-weight: 900; color: #FF1A1A;">-- m</div>
-          </div>
-          <div style="background: #0E131E; border: 1px solid rgba(255,184,0,0.35); border-radius: 4px; padding: 6px; text-align: center;">
-            <div style="color: #FFCB47; font-weight: 700;">75% MASS</div>
-            <div id="radius75Text" style="font-size: 1.15rem; font-weight: 900; color: #FFB800;">-- m</div>
-          </div>
-          <div style="background: #0E131E; border: 1px solid rgba(0,245,212,0.35); border-radius: 4px; padding: 6px; text-align: center;">
-            <div style="color: #4FFFAA; font-weight: 700;">50% MASS</div>
-            <div id="radius50Text" style="font-size: 1.15rem; font-weight: 900; color: #00F5D4;">-- m</div>
-          </div>
-        </div>
-
-        <!-- Radar Heatmap Canvas -->
-        <div class="radar-container">
-          <canvas id="searchRadarCanvas" width="560" height="220" class="radar-canvas"></canvas>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; flex-wrap: wrap;">
-          <button class="dossier-action-btn" style="background: rgba(0,245,212,0.15); border-color: #00F5D4; color: #00F5D4; flex: 1;" onclick="triggerSightingObservation()">
-            📡 Ingest Opportunistic Peer Sighting (Bayesian Contraction)
-          </button>
-          <div id="sightingFeedback" style="font-size: 0.72rem; color: #00F5D4; font-family: monospace;"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Real-time Tactical Mesh Telemetry & BitChat Wire Inspector -->
-    <section class="telemetry-section" style="background: var(--bg-surface); border: var(--border-thick); border-radius: var(--border-radius-tactical); padding: 12px; margin-top: 14px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleTelemetry()">
-        <div style="font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
-          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #00E676; box-shadow: 0 0 6px #00E676;"></span>
-          LIVE MESH TELEMETRY &amp; PACKET INSPECTOR
-        </div>
-        <div id="telemetryToggleText" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 700;">[HIDE ▲]</div>
-      </div>
-
-      <div id="telemetryBody" style="margin-top: 12px;">
-        <div style="display: flex; gap: 6px; border-bottom: 1px solid #2A2E3D; padding-bottom: 8px; overflow-x: auto;">
-          <button class="tele-tab active" id="tabWire" onclick="switchTeleTab('wire')">BitChat Wire Packets (<span id="wireCount">0</span>)</button>
-          <button class="tele-tab" id="tabAudit" onclick="switchTeleTab('audit')">SQLite WAL Audit (<span id="auditCount">0</span>)</button>
-          <button class="tele-tab" id="tabDtn" onclick="switchTeleTab('dtn')">DTN Outbox (<span id="dtnCount">0</span>)</button>
-          <button class="tele-tab" id="tabAi" onclick="switchTeleTab('ai')">Edge AI Extractor (<span id="aiCount">0</span>)</button>
-          <button class="tele-tab" id="tabNostr" onclick="switchTeleTab('nostr')">Nostr Kind 20042</button>
-          <button class="tele-tab" id="tabConsole" onclick="switchTeleTab('console')">Console Stream</button>
-        </div>
-
-        <div id="teleContent" style="margin-top: 10px; font-family: monospace; font-size: 0.78rem; max-height: 220px; overflow-y: auto; background: #07090D; padding: 10px; border-radius: 6px; border: 1px solid #1C202C;">
-          <div style="color: #6B7285;">Awaiting live mesh sync packets...</div>
-        </div>
-      </div>
-    </section>
+    </footer>
   </div>
 
-  <!-- Bottom Tactical Bar -->
-  <footer class="footer-bar">
-    <div id="footerStatus" style="font-size: 0.75rem; color: var(--text-secondary);">
-      BLE Mesh: <strong style="color: #FFF;">Initializing...</strong>
+  <!-- ========================================================================
+       Modals: Operations Lifecycle, Divergence Resolution, Patient Dossier
+       ======================================================================== -->
+
+  <!-- Tactical Mesh Sync & Secure Device Pairing Modal -->
+  <div class="modal-overlay" id="meshPairingModal" style="display: none;" role="dialog" aria-modal="true" aria-label="Device Pairing and Mesh Sync">
+    <div class="modal-box" style="max-width: 680px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="font-size: 1.15rem; font-weight: 900; color: var(--accent-primary); display: flex; align-items: center; gap: 8px;">
+          🔗 MESH DEVICE PAIRING &amp; LAN SYNC
+        </div>
+        <button type="button" onclick="closeMeshPairingModal()" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+      </div>
+
+      <!-- Local Identity & PIN Info Card -->
+      <div style="background: var(--bg-secondary); border: var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800;">This Laptop Node (Coordinator)</div>
+          <div style="font-size: 0.95rem; font-weight: 800; color: var(--text-primary);" id="meshLocalNodeId">node_laptop</div>
+          <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">
+            Listener: <span id="meshLocalAddress" class="badge-mono" style="background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 3px;">0.0.0.0:4323</span>
+          </div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800;">This Device Pairing PIN</div>
+          <div style="display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 2px;">
+            <span id="meshLocalPinDisplay" style="font-size: 1.15rem; font-weight: 900; color: var(--triage-green); letter-spacing: 1px; font-family: var(--font-mono);">TACTICAL-000000</span>
+            <button type="button" onclick="regenerateLocalPin()" title="Regenerate PIN" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #FFF; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem; cursor: pointer;">↻</button>
+          </div>
+          <div style="font-size: 0.68rem; color: var(--text-muted);">Enter this PIN on other phones/nodes to pair</div>
+        </div>
+      </div>
+
+      <!-- Discovered Devices Quick-List -->
+      <div id="meshDiscoveredSection" style="margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 0.78rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase;">
+            Nearby Discovered Responders (mDNS / Broadcast)
+          </span>
+          <button type="button" onclick="scanNearbyPeers()" style="background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--accent-primary); font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-weight: 700;">
+            🔍 Scan
+          </button>
+        </div>
+        <div id="meshDiscoveredPeersList" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Direct Peer Connect & Pair Box -->
+      <div style="background: var(--bg-card); border: var(--border-card); border-radius: var(--radius-md); padding: 14px; margin-bottom: 14px;">
+        <div style="font-size: 0.82rem; font-weight: 800; color: var(--text-primary); margin-bottom: 10px;">
+          Connect to Remote Device
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+          <input type="text" id="peerAddressInput" placeholder="Peer Address (e.g. 10.50.10.15:4322)" value="10.50.10.15:4322" style="flex: 2; min-width: 200px; background: var(--bg-input); border: var(--border-card); color: #FFF; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.82rem; font-family: var(--font-mono); outline: none;" />
+          <input type="text" id="peerPinInput" placeholder="Peer PIN (e.g. TACTICAL-XXXXXX)" style="flex: 1.2; min-width: 150px; background: var(--bg-input); border: var(--border-card); color: #FFF; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.82rem; font-family: var(--font-mono); outline: none;" />
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" id="btnProbePeer" onclick="probeMeshPeer()" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: #FFF; border-radius: var(--radius-sm); padding: 8px 14px; font-weight: 700; font-size: 0.78rem; cursor: pointer;">
+            🔍 Probe
+          </button>
+          <button type="button" id="btnPairPeer" onclick="executeDevicePairing()" style="background: var(--accent-primary); border: none; color: #000; border-radius: var(--radius-sm); padding: 8px 16px; font-weight: 800; font-size: 0.78rem; cursor: pointer;">
+            🔗 Pair Device
+          </button>
+          <button type="button" id="btnSyncPeer" onclick="executeMeshSync()" style="background: var(--triage-green); border: none; color: #000; border-radius: var(--radius-sm); padding: 8px 16px; font-weight: 800; font-size: 0.78rem; cursor: pointer;">
+            🔄 Sync Now
+          </button>
+        </div>
+      </div>
+
+      <!-- Peer Status / Probe Banner -->
+      <div id="meshStatusBanner" style="display: none; padding: 10px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; font-size: 0.78rem; line-height: 1.4;"></div>
+
+      <!-- Paired Nodes Table -->
+      <div style="font-size: 0.78rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 6px; text-transform: uppercase;">
+        Active Paired Mesh Nodes
+      </div>
+      <div id="meshPairedPeersContainer" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+        <!-- Filled dynamically -->
+      </div>
+
+      <!-- Real-time Synchronization Log -->
+      <div style="font-size: 0.72rem; font-weight: 800; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase;">
+        Mesh Activity Log
+      </div>
+      <div id="meshSyncConsole" style="background: #020408; border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); max-height: 100px; overflow-y: auto;">
+        <div>[IDLE] Waiting for peer activity or pairing request...</div>
+      </div>
     </div>
-    <button class="wipe-btn" onclick="triggerEmergencyWipe()">EMERGENCY WIPE</button>
-  </footer>
+  </div>
+
+  <!-- Tactical Operation Lifecycle Management Modal -->
+  <div class="modal-overlay" id="operationsModal" style="display: none;" role="dialog" aria-modal="true" aria-label="Tactical Operation Lifecycle">
+    <div class="modal-box" style="max-width: 620px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="font-size: 1.15rem; font-weight: 900; color: var(--triage-yellow); display: flex; align-items: center; gap: 8px;">
+          📋 Tactical Operation Lifecycle
+        </div>
+        <button type="button" onclick="closeOperationsModal()" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+      </div>
+
+      <!-- Active Operations List -->
+      <div style="font-size: 0.78rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase;">
+        Disaster Incidents &amp; Operations
+      </div>
+      <div id="operationsListContainer" style="max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+        <!-- Filled dynamically -->
+      </div>
+
+      <!-- Create New Operation Form -->
+      <div style="background: var(--bg-secondary); border: var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 14px;">
+        <div style="font-size: 0.84rem; font-weight: 800; color: var(--text-primary); margin-bottom: 10px;">+ Initiate New Operation</div>
+        <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+          <input type="text" id="newOpIdInput" placeholder="OP ID (e.g. OP-EARTHQUAKE-2026)" style="flex: 1; min-width: 180px; background: var(--bg-input); border: var(--border-card); color: #FFF; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; outline: none;" />
+          <input type="text" id="newOpTitleInput" placeholder="Operation Title" style="flex: 1.5; min-width: 200px; background: var(--bg-input); border: var(--border-card); color: #FFF; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; outline: none;" />
+        </div>
+        <button type="button" onclick="createNewOperation()" style="background: var(--mode-field); color: #FFF; border: none; border-radius: var(--radius-sm); padding: 8px 16px; font-weight: 800; font-size: 0.8rem; cursor: pointer;">Initiate Operation</button>
+      </div>
+
+      <!-- Coordinator Archiving Notice -->
+      <div style="font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 10px;">
+        ℹ️ Finalizing and Archiving requires <strong>COORDINATOR</strong> role. Archiving encrypts the operational incident snapshot while strictly preserving individual Personal Medical Profile vaults.
+      </div>
+    </div>
+  </div>
 
   <!-- Semantic Divergence Resolution Modal -->
-  <div class="modal-overlay" id="divergenceModal">
+  <div class="modal-overlay" id="divergenceModal" role="dialog" aria-modal="true" aria-label="Resolve Clinical Divergence">
     <div class="modal-box">
-      <div style="font-size: 1.2rem; font-weight: 900; color: var(--divergence-alert); margin-bottom: 8px;">
+      <div style="font-size: 1.2rem; font-weight: 900; color: var(--divergence-alert); margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
         🚨 Resolve Clinical Disagreement
       </div>
-      <div style="font-size: 0.85rem; color: var(--text-secondary);">
+      <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4;">
         CRDT state converged technically, but two disconnected medics logged conflicting observations:
       </div>
 
       <div class="conflict-row">
         <strong>Medic A (Alpha Team • 10:02):</strong>
-        <div>Diagnosed: <span style="color: var(--triage-red); font-weight: 800;">RED (Immediate)</span></div>
-        <div style="font-size: 0.8rem; color: var(--text-muted);">Observation: Respiratory rate 34, weak pulse.</div>
+        <div style="margin-top: 2px;">Diagnosed: <span style="color: var(--triage-red); font-weight: 800;">RED (Immediate)</span></div>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">Observation: Respiratory rate 34, weak pulse.</div>
       </div>
 
       <div class="conflict-row">
         <strong>Medic B (Bravo Team • 10:03):</strong>
-        <div>Diagnosed: <span style="color: var(--triage-yellow); font-weight: 800;">YELLOW (Delayed)</span></div>
-        <div style="font-size: 0.8rem; color: var(--text-muted);">Observation: Bleeding temporarily controlled with tourniquet.</div>
+        <div style="margin-top: 2px;">Diagnosed: <span style="color: var(--triage-yellow); font-weight: 800;">YELLOW (Delayed)</span></div>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">Observation: Bleeding temporarily controlled with tourniquet.</div>
       </div>
 
       <button class="resolve-btn" onclick="resolveConflict('RED')">CONFIRM AS RED (IMMEDIATE)</button>
       <button class="resolve-btn" style="background: var(--triage-yellow); color: #000; margin-top: 8px;" onclick="resolveConflict('YELLOW')">CONFIRM AS YELLOW (DELAYED)</button>
-      <button class="wipe-btn" style="width: 100%; margin-top: 10px;" onclick="closeDivergenceModal()">CANCEL</button>
+      <button class="wipe-btn" style="width: 100%; margin-top: 10px; background: transparent;" onclick="closeDivergenceModal()">CANCEL</button>
     </div>
   </div>
 
   <!-- Comprehensive Patient Clinical Dossier & Treatment Modal -->
-  <div class="modal-overlay" id="casualtyDossierModal" style="display: none;">
+  <div class="modal-overlay" id="casualtyDossierModal" style="display: none;" role="dialog" aria-modal="true" aria-label="Casualty Clinical Dossier">
     <div class="dossier-box">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #1F2839; padding-bottom: 12px; margin-bottom: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 14px;">
         <div style="display: flex; gap: 12px; align-items: center;">
-          <div class="identicon-box" id="dossierIdenticon" style="width: 44px; height: 44px;"></div>
+          <div class="identicon-box" id="dossierIdenticon" style="width: 48px; height: 48px;"></div>
           <div>
             <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="phonetic-id" id="dossierEphemeralId" style="font-size: 1.3rem;">CASUALTY</span>
-              <span id="dossierTriageBadge" style="padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.75rem;">RED</span>
+              <span class="phonetic-id" id="dossierEphemeralId" style="font-size: 1.35rem;">CASUALTY</span>
+              <span id="dossierTriageBadge" style="padding: 2px 8px; border-radius: var(--radius-xs); font-weight: 800; font-size: 0.75rem;">RED</span>
             </div>
-            <div id="dossierPatientId" style="font-size: 0.68rem; color: #64748B; font-family: monospace;">UUID</div>
+            <div id="dossierPatientId" style="font-size: 0.7rem; color: var(--text-muted); font-family: var(--font-mono);">UUID</div>
           </div>
         </div>
-        <button class="dossier-action-btn" onclick="closeCasualtyDossier()" style="padding: 4px 10px;">✕ Close</button>
+        <button class="dossier-action-btn" onclick="closeCasualtyDossier()" style="padding: 6px 12px;">✕ Close</button>
       </div>
 
       <!-- Dossier Navigation Tabs -->
@@ -978,6 +1862,43 @@
 
       <!-- Dossier Tab Content Container -->
       <div id="dossierTabContent"></div>
+    </div>
+  </div>
+
+
+  <!-- Universal Confirmation / Destructive Action Modal -->
+  <div class="modal-overlay" id="confirmationModal" style="display: none; z-index: 2100;" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <div class="modal-box" id="confirmModalBox" style="max-width: 520px; border-left: 4px solid var(--triage-yellow);">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+        <div id="confirmModalTitle" style="font-size: 1.15rem; font-weight: 800; color: #FFF; display: flex; align-items: center; gap: 8px;">
+          ⚠️ Confirm Action
+        </div>
+        <button class="dossier-action-btn" onclick="closeConfirmationDialog(false)" style="padding: 4px 10px;" aria-label="Cancel and close dialog">✕</button>
+      </div>
+      <div id="confirmModalMessage" style="font-size: 0.88rem; color: #E2E8F0; line-height: 1.5; margin-bottom: 10px; font-weight: 600;">
+        Are you sure you want to proceed?
+      </div>
+      <div id="confirmModalDetails" style="font-size: 0.8rem; color: #94A3B8; line-height: 1.45; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; margin-bottom: 16px;">
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px;">
+        <button id="confirmCancelBtn" type="button" class="dossier-action-btn" onclick="closeConfirmationDialog(false)" style="padding: 8px 16px;">Cancel</button>
+        <button id="confirmActionBtn" type="button" class="btn-primary" onclick="executeConfirmedAction()" style="padding: 8px 18px; font-weight: 800;">Proceed</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DTN Outbox Packet Inspector Modal -->
+  <div class="modal-overlay" id="packetDetailModal" style="display: none;" role="dialog" aria-modal="true" aria-label="DTN Packet Wire Inspector">
+    <div class="modal-box" style="max-width: 680px; max-height: 85vh; overflow-y: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="font-size: 1.15rem; font-weight: 800; color: #F59E0B; display: flex; align-items: center; gap: 8px;">
+          📦 DTN Packet Wire Inspector
+        </div>
+        <button class="dossier-action-btn" onclick="closePacketDetail()" style="padding: 4px 10px;">✕ Close</button>
+      </div>
+      <div id="packetDetailContent">
+        <!-- Dynamically injected packet inspection details -->
+      </div>
     </div>
   </div>
 

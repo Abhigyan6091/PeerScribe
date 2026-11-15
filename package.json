@@ -1,6 +1,6 @@
 {
   "name": "peerscribe",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "An Offline-First, Peer-to-Peer Clinical Coordination and Emergency Information System",
   "private": true,
   "type": "module",
@@ -11,9 +11,10 @@
   "scripts": {
     "lint": "echo 'Linting checks passed.'",
     "typecheck": "echo 'Typechecking verified.'",
-    "test": "node --experimental-strip-types --test packages/protocol/tests/protocol.test.ts packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts packages/backend-service/tests/daemon.test.ts tests/benchmarks/experiments.test.ts apps/desktop-electron/tests/desktop.test.cjs",
+    "test": "node --experimental-strip-types --test packages/protocol/tests/protocol.test.ts packages/core-engine/tests/core_engine.test.ts packages/platform-adapters/tests/ble_mesh.test.ts packages/backend-service/tests/daemon.test.ts packages/backend-service/tests/manual_issues_regression.test.ts tests/benchmarks/experiments.test.ts tests/field_drill/multi_device_field_drill.test.ts apps/desktop-electron/tests/desktop.test.cjs",
     "test:protocol": "node --experimental-strip-types --test packages/protocol/tests/protocol.test.ts",
     "test:electron": "node --test apps/desktop-electron/tests/desktop.test.cjs",
+    "test:drill": "node --experimental-strip-types --test tests/field_drill/multi_device_field_drill.test.ts",
     "test:coverage": "node --experimental-strip-types --test packages/core-engine/tests/core_engine.test.ts",
     "test:daemon": "node --experimental-strip-types --test packages/backend-service/tests/daemon.test.ts",
     "test:bench:crdt": "node --experimental-strip-types --test tests/benchmarks/experiments.test.ts",

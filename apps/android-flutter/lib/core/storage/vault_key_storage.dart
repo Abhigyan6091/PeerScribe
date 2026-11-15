@@ -4,6 +4,16 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+/// Typed exception thrown when secure key storage operations fail.
+class VaultKeyStorageException implements Exception {
+  final String message;
+  final Object? cause;
+  const VaultKeyStorageException(this.message, [this.cause]);
+
+  @override
+  String toString() => 'VaultKeyStorageException: $message${cause != null ? ' (cause: $cause)' : ''}';
+}
+
 /// Abstract Key Storage interface for the Personal Health Profile Vault.
 /// Ensures standard per-installation key management without hardcoding keys or passphrases.
 abstract class VaultKeyStorage {
@@ -24,13 +34,23 @@ class PlatformSecureVaultKeyStorage implements VaultKeyStorage {
 
   @override
   Future<List<int>> getOrCreateMasterKey() async {
+    String? existingBase64;
     try {
-      final existingBase64 = await _storage.read(key: _keyAlias);
-      if (existingBase64 != null && existingBase64.isNotEmpty) {
-        return base64.decode(existingBase64);
+      existingBase64 = await _storage.read(key: _keyAlias);
+    } catch (e) {
+      throw VaultKeyStorageException('Failed to read master key from secure storage', e);
+    }
+
+    if (existingBase64 != null && existingBase64.isNotEmpty) {
+      try {
+        final decoded = base64.decode(existingBase64);
+        if (decoded.length == 32) {
+          return decoded;
+        }
+        throw const FormatException('Persisted master key length is not 32 bytes');
+      } catch (e) {
+        throw VaultKeyStorageException('Corrupted master key in secure storage', e);
       }
-    } catch (_) {
-      // If secure storage access fails (e.g. host unit test), fallback handled via file/in-memory
     }
 
     // Generate random 256-bit (32-byte) key using CSPRNG
@@ -42,7 +62,20 @@ class PlatformSecureVaultKeyStorage implements VaultKeyStorage {
 
     try {
       await _storage.write(key: _keyAlias, value: base64.encode(newKey));
-    } catch (_) {}
+    } catch (e) {
+      throw VaultKeyStorageException('Failed to persist newly generated master key to secure storage', e);
+    }
+
+    // Verify key persistence
+    try {
+      final verified = await _storage.read(key: _keyAlias);
+      if (verified == null || verified != base64.encode(newKey)) {
+        throw const VaultKeyStorageException('Secure storage persistence verification failed after write');
+      }
+    } catch (e) {
+      if (e is VaultKeyStorageException) rethrow;
+      throw VaultKeyStorageException('Verification read failed for secure storage key', e);
+    }
 
     return newKey;
   }
@@ -51,7 +84,9 @@ class PlatformSecureVaultKeyStorage implements VaultKeyStorage {
   Future<void> clearMasterKey() async {
     try {
       await _storage.delete(key: _keyAlias);
-    } catch (_) {}
+    } catch (e) {
+      throw VaultKeyStorageException('Failed to clear master key from secure storage', e);
+    }
   }
 }
 

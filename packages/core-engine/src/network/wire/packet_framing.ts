@@ -7,7 +7,8 @@ export const PacketType = {
   CRDT_SYNC_BUNDLE: 0x01,
   BEACON_HEARTBEAT: 0x02,
   SOS_PRIORITY: 0x03,
-  EMERGENCY_WIPE_CMD: 0x04
+  EMERGENCY_WIPE_CMD: 0x04,
+  BINARY_ATTACHMENT: 0x05
 } as const;
 export type PacketType = typeof PacketType[keyof typeof PacketType];
 
@@ -155,6 +156,11 @@ export function decodePacket(buffer: Buffer): WirePacket {
     throw new Error(`Corrupted packet: CRC32 checksum mismatch (expected 0x${expectedChecksum.toString(16)}, got 0x${checksum.toString(16)})`);
   }
 
+  let finalPayload = payload;
+  if ((flags & PacketFlags.LZ4_COMPRESSED) !== 0) {
+    finalPayload = lz4Decompress(payload);
+  }
+
   return {
     header: {
       type,
@@ -167,6 +173,6 @@ export function decodePacket(buffer: Buffer): WirePacket {
       payloadLength,
       checksum
     },
-    payload
+    payload: finalPayload
   };
 }

@@ -27,6 +27,7 @@ export * from './clinical/semantic_safety.ts';
 
 // Edge AI Speech & Structured Clinical Extraction
 export * from './ai/clinical_extractor.ts';
+export * from './ai/whisper_asr.ts';
 
 // Probabilistic Location Recovery & Particle Filter
 export * from './location/particle_filter.ts';
@@ -36,3 +37,6 @@ export * from './security/emergency_wipe.ts';
 
 // Durable Local Storage & Database
 export * from './storage/db.ts';
+
+// Shared Protocol & Roles
+export * from '../../protocol/src/index.ts';

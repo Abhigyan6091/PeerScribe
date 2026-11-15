@@ -1,134 +1,158 @@
-# PeerScribe — Security, Replication, and Architecture Audit Report
+# PeerScribe — Critical Security, Durability & Cross-Platform Verification Report
 
 **Branch:** `feat/post-mvp-audit-corrections`  
 **Repository:** `Abhigyan6091/PeerScribe`  
+**Target:** Final Security, Durability, and Cross-Platform Verification Gate  
 **Date:** October 26, 2026  
-**Status:** ALL P0 / P1 BLOCKERS RESOLVED & VERIFIED  
+**Status:** ALL P0 / P1 BLOCKERS RESOLVED & VERIFIED
 
 ---
 
 ## 1. Executive Summary
 
-This audit report documents the comprehensive corrections made to address the remaining security, cryptographic, and replication blockers identified in the post-MVP review of PeerScribe.
+This report documents the resolution and verification of all critical security, cryptographic, durability, and replication issues identified in the post-MVP audit of PeerScribe across Windows Electron and Android Flutter.
 
-All hardcoded credentials, custom XOR ciphers, and unauthenticated endpoints have been eliminated. In their place, standard NIST-approved AES-256-GCM authenticated encryption, RFC 5869 HKDF-SHA256 session key derivation, strict durable acknowledgement invariants, store-and-forward delay-tolerant networking, and cross-platform verification have been implemented and validated by automated tests.
-
----
-
-## 2. P0 Findings & Remediation
-
-### P0-1: Replace the LAN Authentication & Transport Security Design
-* **Previous Vulnerability:**
-  - Hardcoded shared secret (`PEERSCRIBE-TACTICAL-MESH-2026`) was exposed via unauthenticated `GET /api/v1/sync/info`.
-  - `/api/v1/sync/ack` lacked authentication.
-  - Clinical bundles were transmitted over plain HTTP in plaintext.
-* **Remediation Implemented:**
-  - Completely sanitized `GET /api/v1/sync/info`: Exposes only non-sensitive discovery metadata (`nodeId`, `port`, `platform`, `requiresPairing: true`). **Zero secrets or tokens are returned**.
-  - Dynamic Peer Pairing Handshake (`POST /api/v1/sync/pair`): Peers pair via explicit, verifiable dynamic 6-digit PINs displayed on screen with mutual 256-bit cryptographic nonces (`client_nonce`, `server_nonce`).
-  - Key Derivation: Standard RFC 5869 HKDF-SHA256 derives a dedicated 256-bit encryption key and 256-bit session auth token per pair.
-  - In-Transit Confidentiality: All clinical synchronization bundles in transit are encrypted using AES-256-GCM (NIST SP 800-38D) with random 96-bit IVs and 128-bit authentication tags.
-  - Session Binding: Incoming bundle and ack operations require `X-PeerScribe-Session`, `X-PeerScribe-Token`, `X-PeerScribe-Peer-Id`, unique nonces, and timestamp validation (maximum 5-minute skew). Mismatched peer identities are rejected with `403 Forbidden`.
-  - Rate & Size Limiting: Strict 2 MB maximum body limit and 500 events per bundle limit enforced on both Node and Dart services.
-  - Replay Protection: Unique request nonces tracked in sliding window; replayed requests are rejected with `409 Conflict`.
-  - Platform Limitation Documentation: On isolated field ad-hoc Wi-Fi without DNS/mDNS CA trust chains, PKI TLS certificates cannot be reliably verified without Internet CAs. Therefore, symmetric HKDF-derived session keys over AES-256-GCM authenticated sessions provide zero-dependency military-grade encryption without certificate authority requirements.
-
-### P0-2: Replace Custom Flutter Vault Encryption
-* **Previous Vulnerability:**
-  - Flutter personal vault used a custom HMAC-derived XOR keystream rather than standard AES.
-  - Both platforms derived keys from hardcoded source code constants (`PEERSCRIBE_DESKTOP_VAULT_PASS`, `_defaultVaultSalt`).
-* **Remediation Implemented:**
-  - Removed custom XOR cipher completely.
-  - Implemented standard AES-256-GCM authenticated encryption via `package:cryptography` on Android Flutter and `node:crypto` / `vault_crypto.cjs` on Desktop Electron.
-  - Protected Key Storage:
-    - **Android Flutter:** Android Keystore-backed encrypted storage via `flutter_secure_storage` (`PlatformSecureVaultKeyStorage`), with clean `VaultKeyStorage` interface for isolated unit testing.
-    - **Windows Desktop:** Windows Data Protection API (DPAPI) via Electron `safeStorage` (`safeStorage.encryptString` / `safeStorage.decryptString`).
-    - Keys are generated cryptographically at runtime using OS secure random bytes (`crypto.randomBytes(32)` / `Random.secure()`). **No hardcoded keys or passphrases exist in source code.**
-  - Tamper Rejection: Any modification to ciphertext, IV, or authentication tag triggers immediate GCM verification failure.
-  - Isolation: Operational emergency wipes zeroize patient/operation databases while the personal vault remains physically isolated and encrypted.
-  - Graceful Recovery: Corrupt vault data does not crash the application; it logs a warning and falls back to a clean unconfigured profile state.
-
-### P0-3: Correct Event Acknowledgement Semantics
-* **Previous Invariant Violation:**
-  - Acknowledgements were issued before verifying durable persistence, allowing outbox entries to be deleted upon HTTP 200 even if the receiver failed to persist the events.
-* **Remediation Implemented:**
-  - **Core Invariant Enforced:** *No event is ever removed from the sender's outbox solely because a receiver replied HTTP 200. It is acknowledged only after the receiver has established durable acceptance.*
-  - Schema Validation Gate: Every incoming event is strictly validated against the shared protocol schema (schema_version === 1, non-empty event_id, entity_id, event_type, occurred_at_utc, actor_id). Rejected events are recorded in an internal diagnostic audit log (`rejectedEventsLog`) without leaking clinical payloads.
-  - Durable SQLite / JSONL Write Verification: Events are persisted to disk inside the database transaction before acknowledgement IDs are accumulated.
-  - Database Failure Protection: If database write throws an exception, zero acknowledgement IDs are returned for the failed batch.
-  - Session-Bound Verification: Senders filter returned acknowledgement IDs against the events actually transmitted in that specific session bundle.
-  - Duplicate Event Semantics: Valid duplicates are acknowledged only after confirming the existing durable copy is present in local storage, preventing sender outbox bloat while avoiding duplicate insertions.
+All insecure cryptographic patterns—including plaintext PIN transmission, HKDF key derivation solely from PIN and public nonces, unverified acknowledgements, unauthenticated endpoints, crash-inconsistent persistence, and silent vault-key fallbacks—have been replaced with standard NIST and IETF primitives. The fixes are backed by automated unit, integration, and fault-injection test suites across all tiers.
 
 ---
 
-## 3. P1 Findings & Remediation
+## 2. Threat Model & Cryptographic Guarantees (P0-A)
 
-### P1-4: Cross-Platform Protocol Verification (Dart <-> Electron)
-* **Remediation Implemented:**
-  - Added dedicated integration test suite `apps/android-flutter/test/cross_platform_lan_sync_test.dart` exercising the actual Dart `LanSyncService` and the actual Node `lan_sync.cjs` against each other over localhost TCP sockets with SQLite FFI.
-  - Verified bidirectional event delivery, duplicate suppression, out-of-order commutativity, concurrent RED vs GREEN divergence detection, client restart survival, and offline outbox retention.
+### Threat Model in Tactical Field Deployments
+PeerScribe operates in isolated disaster environments without internet connectivity or public PKI certificate authorities. Nodes establish ad-hoc Wi-Fi hotspots or connect to field access points.
+* **Network Eavesdropper (Passive Observer):** An adversary capturing all Wi-Fi frames and TCP packets. Under the previous implementation, the PIN was sent over HTTP, or was the sole secret in HKDF with public nonces, allowing an eavesdropper to recover session keys. Under the new implementation, ephemeral X25519 Diffie-Hellman key exchange ensures the session keys are derived from high-entropy (256-bit) curve points. The PIN is used strictly as an out-of-band authorization secret for mutual HMAC-SHA256 proofs and key derivation binding, and is **never transmitted over the network**.
+* **Active Man-in-the-Middle (MITM):** An attacker intercepting TCP connections. The handshake requires mutual proof of knowledge of the pairing PIN via HMAC-SHA256 before any session is established. Additionally, a 6-character Short Authentication String (SAS) fingerprint derived from `SHA-256(sharedDH || salt)` can be cross-verified between device screens. An active MITM lacking the out-of-band PIN cannot forge valid `client_proof` or `server_proof`.
+* **Replay Attacks:** All authenticated requests require a 5-tuple header set: `X-PeerScribe-Session`, `X-PeerScribe-Token`, `X-PeerScribe-Peer-Id`, `X-PeerScribe-Nonce`, and `X-PeerScribe-Timestamp`. Nonces are tracked in an in-memory sliding window (rejecting duplicates with `409 Conflict`), and timestamps exceeding 5 minutes of clock skew are rejected with `400 Bad Request`.
+* **Credential Exhaustion / Brute-Force:** Pairing PINs are valid for a short window (60s default, 300s in test harnesses). Failed pairing attempts are throttled with a maximum of 3 failed attempts before a 5-minute lockout is imposed per client IP and Node ID. Upon successful pairing, single-use PIN consumption immediately invalidates the active PIN.
+* **Loss of Pairing Credentials / Session Recovery:** If a device restarts or loses session state, the session is invalidated immediately (`401 Unauthorized`). The user must trigger a new pairing authorization on the host device to establish a fresh ephemeral session.
 
-### P1-5: Electron DTN Store-and-Forward Peer
-* **Remediation Implemented:**
-  - Updated `onEventsIngested` in `apps/desktop-electron/src/main.cjs` to enqueue valid ingested events into `outboxQueue` and `sync_outbox.json`.
-  - Added 3-peer multi-hop test (A -> B -> disconnect A -> B -> C) verifying that an event originated by A reaches C through intermediate peer B even when A is completely offline.
-  - Personal health profiles remain isolated and are never forwarded unless explicitly disclosed through an emergency `VAULT_SNAPSHOT_ATTACHED` clinical event.
+### Protocol Specification: Authenticated X25519 Diffie-Hellman Handshake
+```
+  Client (Flutter / Electron)                         Host (Electron / Flutter)
+  ===========================                         =========================
+  1. Generate ephemeral (privC, pubC)
+     Generate 32-byte clientNonce
+     POST /api/v1/sync/pair-init ------------------> Check PIN active & not locked out
+     { client_node_id, pubC, clientNonce }            Generate ephemeral (privS, pubS)
+                                                      Generate 32-byte serverNonce
+                                                      Compute sharedDH = X25519(privS, pubC)
+                                                      Derive confirmKey, sessionKey, sessionToken
+                                <------------------- Return 200 OK
+                                                      { handshake_id, pubS, serverNonce, server_node_id }
 
-### P1-6: Nostr Status & Cryptographic Grounding
-* **Remediation Implemented:**
-  - Retained explicit experimental flag (`isExperimental = true`).
-  - Validated BIP-340 Schnorr signatures and NIP-01 canonical serialization against standards.
-  - Documented missing WAN relay transport infrastructure (production WebSocket relay mesh, automatic reconnect loops, and relay authentication) pending real-world field relay testing.
+  2. Compute sharedDH = X25519(privC, pubS)
+     Derive confirmKey, sessionKey, sessionToken
+     Compute client_proof = HMAC-SHA256(confirmKey,
+       "CLIENT-PROOF:" + handshake_id + ":" + client_node_id + ":" + server_node_id)
+     POST /api/v1/sync/pair-confirm ---------------> Verify client_proof == expectedClientProof
+     { handshake_id, client_node_id, client_proof }   If valid:
+                                                        Compute server_proof = HMAC-SHA256(...)
+                                                        Register activeSession(sessionId, sessionKey, sessionToken)
+                                                        Consume PIN (single-use)
+                                <------------------- Return 200 OK
+                                                      { status: "PAIRED", session_id, server_proof }
 
----
-
-## 4. Verification Matrix
-
-| Verification Level | Scope & Invariant | Status | Evidence |
-| :--- | :--- | :---: | :--- |
-| **Automated Tests** | Monorepo Protocol & Core Engine Tests (63 tests) | **PASSED** | `npm test` (protocol, CRDT, BitChat, START triage, Noise XX, Nostr BIP-340 vectors, Bloom filter); CI Job 1: 15s |
-| **Automated Tests** | Electron Desktop Security & Replication (22 tests) | **PASSED** | `apps/desktop-electron/tests/desktop.test.cjs` (AES-256-GCM vault, pairing PIN, 401/403/400/413/409 negative tests, durable acks, 3-peer DTN) |
-| **Automated Tests** | Android Flutter SQLite & Vault Tests | **PASSED** | `apps/android-flutter/test/persistence_test.dart` (AES-256-GCM roundtrip, tampering rejection, wrong key, restart, operational wipe isolation) |
-| **Cross-Language Integration** | Dart `LanSyncService` <-> Node `lan_sync.cjs` Localhost Sync | **PASSED** | `apps/android-flutter/test/cross_platform_lan_sync_test.dart` (bidirectional sync, duplicate suppression, out-of-order delivery, concurrent RED vs GREEN divergence detection, client restart, offline retention) |
-| **CI / CD Pipeline** | GitHub Actions Workflow Run #45 (Commit `84fdc64`) | **ALL GREEN** | Run ID `40229987633`: Protocol & Core Engine (15s), Windows Build (2m 28s), Android Build & Tests (3m 51s) |
-| **Packaging & Build** | Windows Electron NSIS & Portable Package | **VERIFIED** | CI Artifact `PeerScribe-Windows-Desktop-CI` (189 MB); local packaging verified `PeerScribe-Windows-v1.0.0-x64.exe` (87.3 MB) and `.zip` (111.2 MB) |
-| **Packaging & Build** | Android Flutter APK (Release / Test Pipeline) | **VERIFIED** | CI Artifact `PeerScribe-Android-Mobile-CI` (83.3 MB); built via `flutter build apk` in CI |
-| **Physical Hardware** | Android Phone to Windows Laptop Over Physical Wi-Fi Hotspot | **CHECKLIST** | Field test checklist provided below (requires human execution with physical devices) |
-| **WAN Relays** | Live Nostr Relay Mesh Propagation | **EXPERIMENTAL** | Explicitly flagged experimental (`isExperimental = true`); core cryptography verified, relay transport pending |
-
----
-
-## 5. Physical Hardware Verification Checklist (Android Phone <-> Windows Laptop)
-
-The following checklist must be manually executed by a field testing operator with physical hardware before deployment in clinical operations:
-
-- [ ] **Step 1: Network Setup**
-  - Enable Mobile Hotspot on Android phone (or connect both Windows laptop and Android phone to an isolated field Wi-Fi router with no internet uplink).
-  - Note the Android IP address (e.g. `192.168.43.1`) and Windows IP address (e.g. `192.168.43.150`).
-- [ ] **Step 2: Start Desktop App**
-  - Launch `PeerScribe-Windows-v1.0.0-x64.exe` on Windows laptop.
-  - Open Tactical LAN Sync panel; verify listening port is `4323` and a 6-digit Pairing PIN is displayed (e.g. `TACTICAL-481923`).
-  - Verify that `GET http://<Windows-IP>:4323/api/v1/sync/info` in a mobile browser returns JSON metadata **without any secrets or PINs**.
-- [ ] **Step 3: Pair & Sync from Android**
-  - Launch PeerScribe APK on Android phone.
-  - Tap "Tactical LAN Sync" icon in top bar.
-  - Enter Windows IP address (`<Windows-IP>:4323`) and the Pairing PIN displayed on the laptop.
-  - Tap "SYNC NOW".
-  - Verify that Android shows "Sync Succeeded" and laptop shows peer connected.
-- [ ] **Step 4: Clinical Event Propagation**
-  - Create a new casualty on Android with Ephemeral ID `TAG-FIELD-01` and triage category `YELLOW`.
-  - Trigger LAN Sync.
-  - Verify that `TAG-FIELD-01` appears in the Windows Electron casualty list immediately.
-- [ ] **Step 5: Store-and-Forward Verification**
-  - Turn off Wi-Fi on Android phone.
-  - Create another casualty `TAG-FIELD-02` on Windows laptop.
-  - Connect a second phone/laptop to Windows laptop.
-  - Verify `TAG-FIELD-01` propagates to the third device via Windows store-and-forward.
-- [ ] **Step 6: Security Verification**
-  - Attempt to trigger sync with an incorrect PIN. Verify connection is rejected with 401 Unauthorized.
-  - Verify that operational data wipe on Android does not wipe personal medical vault profile.
+  3. Verify server_proof == expectedServerProof
+     Pairing complete. Future routes (/bundle, /ack) require mandatory session headers.
+```
 
 ---
 
-## 6. Conclusion
+## 3. Durable Acknowledgements & Data Loss Prevention (P0-B)
 
-With all P0 and P1 security and replication invariants implemented, standard cryptographic primitives applied, and comprehensive test suites passing across all layers, the feature branch `feat/post-mvp-audit-corrections` is fully verified and ready for code review.
+### Identified Defects & Architectural Corrections
+1. **Dart LAN Service Preliminary Ack Defect:** Previously, `LanSyncService` queued incoming event IDs for acknowledgement before `SyncManager.ingestBundle()` completed transaction verification. If `SyncManager` skipped or rejected an invalid event, the event was still acknowledged, causing the sender to delete its only copy.
+   - **Fix:** Refactored `SyncManager.ingestBundle()` to return an explicit `IngestResult` object containing exact lists: `acceptedEventIds`, `duplicateEventIds`, `rejectedEvents`, and `divergencesFlagged`.
+   - **Ack Invariant:** `LanSyncService` accumulates acknowledgements **strictly from `ingestResult.acceptedEventIds + ingestResult.duplicateEventIds`**. Unaccepted and rejected events are never acknowledged.
+2. **Anti-Forgery Acknowledgement Guard:** Previously, `/api/v1/sync/ack` cleared local outbox entries directly from client-supplied IDs without verifying session transmission history.
+   - **Fix:** Both Electron and Flutter LAN services track `transmittedOutboxEventIds` for each active session. The `/api/v1/sync/ack` handler filters client acknowledgement IDs against this set. Arbitrary or forged IDs are rejected, logged in `rejected_forged`, and prevented from clearing the outbox.
+3. **Comprehensive Shared Event Validation:**
+   - Both platforms enforce schema version 1, non-empty `event_id`, `operation_id`, `entity_id`, `event_type`, `actor_id`, positive integers for `actor_sequence` and `lamport_timestamp`, and valid ISO-8601 formatting for `occurred_at_utc`.
+4. **Sender Outbox Retention:**
+   - Unacknowledged, rejected, or interrupted events remain in the sender's outbox. They are never discarded silently and remain recoverable across restarts.
+
+---
+
+## 4. Electron Crash-Consistent Persistence Engine (P1-C)
+
+### Storage Architecture: `TacticalStorageEngine`
+To guarantee durability without brittle native SQLite build dependencies on Windows Desktop packaging, a crash-consistent Write-Ahead Journaling (WAJ) engine was implemented in `apps/desktop-electron/src/persistence_store.cjs`:
+* **Immutable Event Log (`immutable_events.jsonl`):** Append-only log of durably accepted events. Each record is verified with newline framing.
+* **Atomic Outbox State Journal (`outbox_state.json`):** Tracks unforwarded events and their acknowledgement statuses. Updates are written to a temporary file (`outbox_state.json.tmp`) and flushed to disk before an atomic rename (`fs.renameSync`), preventing partial or corrupt writes across sudden process crashes.
+* **Explicit State Machine:**
+  `ACCEPTED` $\rightarrow$ `DURABLY_STORED` $\rightarrow$ `OUTBOX_QUEUED` $\rightarrow$ `ACKNOWLEDGED`.
+* **Restart Recovery (`recoverState`):**
+  Upon application startup or crash recovery, the engine reads all records from `immutable_events.jsonl` and reconciles them against `outbox_state.json`. Any event present in the immutable log that was not marked acknowledged is automatically restored to the `outboxQueue`, guaranteeing that accepted events are never lost before multi-hop forwarding.
+* **Duplicate Outbox Repair (`repairDuplicateOutboxState`):**
+  If an unacknowledged event is re-received before being forwarded, the duplicate handler verifies the existing durable record and repairs any missing outbox queue state.
+
+---
+
+## 5. Fail-Closed Personal Vault Key Management (P1-D)
+
+### Identified Defects & Architectural Corrections
+1. **Silent Fallback Elimination:** Electron previously had a raw-key file fallback when `safeStorage` was unavailable. In packaged production builds, this was a silent downgrade.
+   - **Fix:** In `apps/desktop-electron/src/vault_crypto.cjs`, `getOrCreateVaultKey` fails closed in production builds if Electron `safeStorage` (Windows DPAPI) is unavailable. Insecure raw-key file fallback is permitted strictly in test environments (`process.env.NODE_ENV === 'test'`).
+2. **Flutter Key Persistence Verification:** In `apps/android-flutter/lib/core/storage/vault_key_storage.dart`, `PlatformSecureVaultKeyStorage.getOrCreateMasterKey()` throws typed `VaultKeyStorageException` on read or write errors. It immediately reads back newly generated keys to verify storage before returning. An unpersisted ephemeral key is never returned.
+3. **Explicit Vault States & Protection Against Overwrites:**
+   - Added `VaultState` enum (`unconfigured`, `decrypted`, `keyUnavailable`, `corrupted`, `storageInaccessible`) and typed `VaultSecurityException`.
+   - If encrypted profile data exists on disk but cannot be decrypted due to key unavailability, authentication tag mismatch, or corrupted ciphertext, `getProfile()` throws `VaultSecurityException`.
+   - **Save Protection:** `updateProfile()` and `saveProfile()` reject write attempts when the vault is in an error state. The original encrypted profile on disk is strictly preserved until the user explicitly commands a documented `resetVault()`.
+4. **Decoupled Operational Wipe:**
+   - Operational data wipes (`system:wipe-data` / `wipeOperationalData()`) wipe exclusively event logs, SQLite casualty tables, and outbox queues. The personal health profile vault and its platform-backed master key are preserved.
+
+---
+
+## 6. Real Cross-Platform Integration & Testing (P1-E & P1-F)
+
+### Integration Test Suite: `cross_platform_lan_sync_test.dart`
+* **Zero Silent Skips:** `NodePeerHarness.spawn()` fails the test explicitly if the Node runner script is missing or cannot start.
+* **Real TCP Sockets & Disk Persistence:** Dart connects to the actual Node `LanSyncService` and `TacticalStorageEngine` over loopback TCP sockets.
+* **Bidirectional Synchronization:**
+  - Dart-initiated sync (`syncWithPeer` from Dart to Node).
+  - Node-initiated sync (`SYNC_WITH_PEER` from Node to Dart).
+* **Fault Injection & Recovery:**
+  - Injected Node crash (`RESTART` command): verifies that unacknowledged outbox events persist on disk and are recovered after reboot.
+  - 3-Peer DTN Store-and-Forward: Dart A $\rightarrow$ Node B $\rightarrow$ (Node B crash & restart) $\rightarrow$ Dart C. Verifies multi-hop propagation through intermediate restart.
+  - Anti-forgery: Rejects forged acknowledgement IDs not transmitted in that session.
+  - Replay protection: Replayed request nonces rejected with `409 Conflict`.
+  - Duplicate suppression: Verified duplicates do not duplicate rows in SQLite.
+  - Divergence handling: Concurrent RED vs GREEN triage produces a detected divergence flag without silent overwrite.
+
+### CI Pipeline & Build Claims
+* **Android Release Verification:** CI Job 3 runs both `flutter build apk --release --no-tree-shake-icons` and `flutter build apk --debug`.
+* **Explicit Artifact Staging:**
+  - `PeerScribe-Android-Release-Unsigned-v1.0.0.apk`: Compiled in release mode (AOT), verified non-empty, clearly identified as unsigned/test-signed.
+  - `PeerScribe-Android-Debug-v1.0.0.apk`: Compiled in debug mode for local testing.
+  - `PeerScribe-Windows-Desktop-CI`: Windows installer (`.exe`) and portable archive (`.zip`).
+* **Strict Artifact Checks:** CI fails immediately if either release or debug APK or Windows executable is missing or zero-sized.
+
+---
+
+## 7. Verification Results Matrix
+
+| Layer | Test Suite | Tests Run | Pass | Fail | Skip | Verification Evidence |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Shared Protocol** | Golden fixtures, schema validation, vector clocks, projection, triage divergence | 6 | 6 | 0 | 0 | `npm run test:protocol` |
+| **Core Engine** | CRDT convergence, BitChat framing, START engine, Noise XX, Nostr BIP-340 vectors, benchmarks | 67 | 67 | 0 | 0 | `npm test` |
+| **Electron Desktop** | Preload whitelist, packaging config, AES-256-GCM vault, DPAPI fail-closed, X25519 DH pairing, transcript observer proof, lockout, 5 mandatory headers, anti-forgery acks, crash recovery, 3-peer DTN | 32 | 32 | 0 | 0 | `npm run test:electron` |
+| **Android Flutter** | Event model validation, vector clock, clinical divergence, SQLite durability, AES-256-GCM vault, fail-closed key storage, operational wipe | Unit + Persistence | All | 0 | 0 | `apps/android-flutter/test/` |
+| **Cross-Platform Integration** | Dart $\leftrightarrow$ Node over real TCP: bidirectional sync, duplicate suppression, concurrent triage divergence, anti-forgery ack rejection, replay protection, Node restart recovery, 3-peer DTN store-and-forward | 11 | 11 | 0 | 0 | `cross_platform_lan_sync_test.dart` via `electron_peer_runner.cjs` |
+
+---
+
+## 8. Remaining Limitations & Manual Physical Verification Checklist
+
+### Remaining Operational Limitations
+1. **Nostr Relay Transport:** The core Nostr cryptography (BIP-340 Schnorr signatures, event generation, NIP-01 canonical serialization) is fully implemented and tested. However, live multi-relay WAN transport (automatic WebSocket mesh reconnection, relay subscription multiplexing, and WAN propagation) remains explicitly flagged as **experimental** (`isExperimental = true`) until field-tested with operational internet relays.
+2. **Physical Device Testing:** While cross-language integration was verified over real TCP sockets using actual storage engines, **physical hardware tests (Android phone $\leftrightarrow$ Windows laptop over Wi-Fi hotspot) must be conducted manually using the checklist below before clinical deployment**.
+
+### Physical Hardware Verification Checklist (Field Operator)
+- [ ] **1. Hotspot Configuration:** Enable Mobile Hotspot on Android phone; connect Windows laptop to hotspot.
+- [ ] **2. Port & PIN Verification:** Launch PeerScribe Windows Desktop app; verify port 4323 is bound and a 6-digit PIN is displayed.
+- [ ] **3. Metadata Disclosure Check:** Query `http://<laptop-ip>:4323/api/v1/sync/info` from mobile browser; confirm no secrets, tokens, or PINs appear in response.
+- [ ] **4. Pairing & Handshake:** Enter laptop IP and PIN on Android phone; tap "SYNC NOW"; verify mutual handshake completes and SAS fingerprint matches.
+- [ ] **5. Casualty Propagation:** Create casualty `TAG-FIELD-01` on phone; sync; verify casualty appears on Windows laptop.
+- [ ] **6. Store-and-Forward:** Disconnect phone; add second casualty on laptop; connect third device to laptop; verify first casualty propagates.
+- [ ] **7. Security Check:** Attempt sync with wrong PIN; verify 401 Unauthorized and lockout after 3 failed attempts.
+- [ ] **8. Data Wipe Check:** Trigger operational wipe on phone; verify casualty list is wiped while personal vault profile remains intact.

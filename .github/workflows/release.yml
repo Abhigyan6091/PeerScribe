@@ -63,7 +63,15 @@ jobs:
         run: npm ci
 
       - name: Run Full Monorepo Test Suite
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! npm test 2>&1 | tee test.log; then
+            ERR_MSG=$(tail -n 25 test.log | tr '\r\n' ' ')
+            echo "::error title=Release Monorepo Test Failed::$ERR_MSG"
+            tail -n 60 test.log
+            exit 1
+          fi
 
   build-windows-release:
     name: Build Windows Release Packages
@@ -148,7 +156,7 @@ jobs:
       - name: Build Android Release APK
         working-directory: apps/android-flutter
         run: |
-          flutter build apk --release
+          flutter build apk --release --no-tree-shake-icons
 
       - name: Stage Android Release APK
         run: |

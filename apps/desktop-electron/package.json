@@ -1,6 +1,6 @@
 {
   "name": "@peerscribe/desktop-electron",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "PeerScribe Windows Desktop Tactical Clinical Mesh Client",
   "author": "PeerScribe Open Source Initiative",
   "license": "Apache-2.0",
@@ -44,11 +44,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "PeerScribe-Windows-v${version}-${arch}.${ext}"

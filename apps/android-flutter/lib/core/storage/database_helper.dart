@@ -113,6 +113,22 @@ class DatabaseHelper {
       )
     ''');
 
+    // 5. Mesh Peer Registry (Durable paired peers across restarts)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS peers (
+        node_id TEXT PRIMARY KEY NOT NULL,
+        device_name TEXT,
+        address TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        medium TEXT NOT NULL,
+        pairing_status TEXT NOT NULL,
+        session_id TEXT,
+        session_token TEXT,
+        session_key_base64 TEXT,
+        last_seen_utc TEXT NOT NULL
+      )
+    ''');
+
     // Default operation initialization
     await db.insert(
       'operations',
@@ -129,6 +145,33 @@ class DatabaseHelper {
 
   /// Inserts a new event into the immutable log and enqueues it in the outbox.
   /// Rejects duplicate event insertion (returns false if event_id already exists).
+  /// Alias for insertEvent for clinical records.
+  Future<bool> recordEvent(PeerScribeEvent event) => insertEvent(event);
+
+  /// Calculates the next sequential sequence number for a local actor.
+  Future<int> getNextActorSequence(String actorId) async {
+    final db = await getDatabase();
+    final res = await db.rawQuery(
+      'SELECT MAX(actor_sequence) as max_seq FROM events WHERE actor_id = ?',
+      [actorId],
+    );
+    final maxSeq = (res.first['max_seq'] as num?)?.toInt() ?? 0;
+    return maxSeq + 1;
+  }
+
+  /// Returns the highest Lamport logical timestamp recorded so far.
+  Future<int> getHighestLamportTimestamp() async {
+    final db = await getDatabase();
+    final res = await db.rawQuery('SELECT MAX(lamport_timestamp) as max_lamport FROM events');
+    return (res.first['max_lamport'] as num?)?.toInt() ?? 0;
+  }
+
+  /// Retrieves events for a specific entity ID.
+  Future<List<PeerScribeEvent>> getEventsForEntity(String entityId) => getEventsForPatient(entityId);
+
+  /// Retrieves queued outbox events.
+  Future<List<PeerScribeEvent>> getQueuedOutboxEvents() => getOutbox();
+
   Future<bool> insertEvent(PeerScribeEvent event) async {
     final db = await getDatabase();
 
@@ -239,6 +282,16 @@ class DatabaseHelper {
     return rows
         .map((r) => PeerScribeEvent.fromJson(r['raw_json'] as String))
         .toList();
+  }
+
+  /// Returns the count of events currently queued in the outbox without loading them into memory.
+  Future<int> getOutboxCount() async {
+    final db = await getDatabase();
+    final rows = await db.rawQuery('SELECT COUNT(*) as cnt FROM outbox');
+    if (rows.isNotEmpty) {
+      return (rows.first['cnt'] as num?)?.toInt() ?? 0;
+    }
+    return 0;
   }
 
   /// Removes acknowledged events from the outbox after verified peer delivery.
@@ -373,6 +426,66 @@ class DatabaseHelper {
     );
   }
 
+  /// Operational wipe: Zeroizes operational events and outbox, strictly preserving personal profile vault!
+  Future<void> wipeOperationalData() async {
+    final db = await getDatabase();
+    await db.transaction((txn) async {
+      await txn.delete('outbox');
+      await txn.delete('events');
+    });
+  }
+
+  /// Explicit user-authorized reset: Clears the encrypted personal health vault.
+  Future<void> resetFullVault() async {
+    final db = await getDatabase();
+    await db.delete(
+      'personal_profile',
+      where: 'profile_id = ?',
+      whereArgs: ['local_user'],
+    );
+  }
+
+  /// Saves or updates a peer in the local SQLite mesh registry.
+  Future<void> savePeer(Map<String, dynamic> peerData) async {
+    final db = await getDatabase();
+    await db.insert(
+      'peers',
+      peerData,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Lists all peers recorded in the local mesh registry.
+  Future<List<Map<String, dynamic>>> getPeers() async {
+    final db = await getDatabase();
+    try {
+      return await db.query('peers', orderBy: 'last_seen_utc DESC');
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Looks up a peer by its Node ID or IP address.
+  Future<Map<String, dynamic>?> getPeer(String nodeIdOrAddress) async {
+    final db = await getDatabase();
+    try {
+      final res = await db.query(
+        'peers',
+        where: 'node_id = ? OR address = ?',
+        whereArgs: [nodeIdOrAddress, nodeIdOrAddress],
+        limit: 1,
+      );
+      return res.isNotEmpty ? res.first : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Deletes a peer from the local mesh registry.
+  Future<void> deletePeer(String nodeId) async {
+    final db = await getDatabase();
+    await db.delete('peers', where: 'node_id = ?', whereArgs: [nodeId]);
+  }
   /// Closes the database connection.
   Future<void> close() async {
     if (_database != null && _database!.isOpen) {

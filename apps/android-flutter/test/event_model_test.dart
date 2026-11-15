@@ -121,19 +121,61 @@ void main() {
       );
       expect(emptyId.validate().any((e) => e.contains('event_id is required')), isTrue);
 
-      final badSeq = PeerScribeEvent(
+      final badTimestamp = PeerScribeEvent(
         schemaVersion: 1,
-        eventId: 'evt_bad_seq',
+        eventId: 'evt_bad_time',
         operationId: 'OP_01',
         entityId: 'pt_01',
         eventType: 'PATIENT_CREATED',
         actorId: 'node_A',
-        actorSequence: 0,
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: 'not-a-valid-iso-timestamp',
+        payload: {},
+      );
+      expect(badTimestamp.validate().any((e) => e.contains('occurred_at_utc must be a valid ISO-8601 string')), isTrue);
+
+      final emptyOp = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_bad_op',
+        operationId: '',
+        entityId: 'pt_01',
+        eventType: 'PATIENT_CREATED',
+        actorId: 'node_A',
+        actorSequence: 1,
         lamportTimestamp: 1,
         occurredAtUtc: '2026-10-25T14:00:00.000Z',
         payload: {},
       );
-      expect(badSeq.validate().any((e) => e.contains('actor_sequence must be positive integer')), isTrue);
+      expect(emptyOp.validate().any((e) => e.contains('operation_id is required')), isTrue);
+
+      final emptyActor = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_bad_actor',
+        operationId: 'OP_01',
+        entityId: 'pt_01',
+        eventType: 'PATIENT_CREATED',
+        actorId: '',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: '2026-10-25T14:00:00.000Z',
+        payload: {},
+      );
+      expect(emptyActor.validate().any((e) => e.contains('actor_id is required')), isTrue);
+
+      final badLamport = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_bad_lamport',
+        operationId: 'OP_01',
+        entityId: 'pt_01',
+        eventType: 'PATIENT_CREATED',
+        actorId: 'node_A',
+        actorSequence: 1,
+        lamportTimestamp: 0,
+        occurredAtUtc: '2026-10-25T14:00:00.000Z',
+        payload: {},
+      );
+      expect(badLamport.validate().any((e) => e.contains('lamport_timestamp must be positive integer')), isTrue);
     });
 
     test('P0: clinical divergence correctness between RED and GREEN without silent overwrite', () {
@@ -234,6 +276,62 @@ void main() {
       expect(projResolved.activeTriage, equals('RED'));
       expect(projResolved.triageDisplayLabel, equals('RED'));
       expect(projResolved.divergenceFlags.first['resolved'], isTrue);
+    });
+
+    test('enforces RBAC role capabilities and rejects unauthorized clinical operations', () {
+      // 1. Participant attempting unauthorized triage change
+      final unauthEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_unauth_flutter_01',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'TRIAGE_STATUS_CHANGED',
+        actorId: 'node_civilian',
+        actorRole: 'PARTICIPANT',
+        actorSequence: 1,
+        lamportTimestamp: 1,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'triage_category': 'RED'},
+      );
+
+      final errors = unauthEvent.validate();
+      expect(errors, isNotEmpty);
+      expect(errors.first, contains('lacks authorization for event TRIAGE_STATUS_CHANGED'));
+
+      // 2. Medical responder authorized for triage change
+      final authEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_auth_flutter_02',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'TRIAGE_STATUS_CHANGED',
+        actorId: 'node_medic',
+        actorRole: 'MEDICAL_RESPONDER',
+        actorSequence: 2,
+        lamportTimestamp: 2,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'triage_category': 'YELLOW'},
+      );
+
+      final authErrors = authEvent.validate();
+      expect(authErrors, isEmpty);
+
+      // 3. Participant authorized for observation recording
+      final obsEvent = PeerScribeEvent(
+        schemaVersion: 1,
+        eventId: 'evt_obs_flutter_03',
+        operationId: 'OP_TEST',
+        entityId: 'pt_test_01',
+        eventType: 'OBSERVATION_RECORDED',
+        actorId: 'node_civilian',
+        actorRole: 'PARTICIPANT',
+        actorSequence: 3,
+        lamportTimestamp: 3,
+        occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+        payload: {'text': 'Found responsive'},
+      );
+
+      expect(obsEvent.validate(), isEmpty);
     });
   });
 }
