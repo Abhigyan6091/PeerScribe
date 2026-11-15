@@ -332,6 +332,9 @@ class LanSyncService {
         localNodeId: _nodeId,
         localRole: ResponderRole.medicalResponder,
         geohash: 'u15ek200',
+        port: _port,
+        pairingPin: _activePairingPin,
+        ipAddress: localIps.isNotEmpty ? localIps.first : '127.0.0.1',
       );
       BleMeshService().startScanning();
     }).catchError((e) {
