@@ -44,13 +44,13 @@ class OfflineWhisperService {
   OfflineWhisperService._internal();
 
   static const MethodChannel _whisperChannel = MethodChannel('com.peerscribe.mesh/whisper');
-  static const String modelArchitecture = 'whisper-tiny-quantized-int8';
+  static const String defaultArchitecture = 'whisper-tiny-quantized-int8';
   static const int sampleRateHz = 16000;
   static const int melChannels = 80;
 
   bool get isLocalModel => true;
-  String get modelArchitecture => OfflineWhisperService.modelArchitecture;
-  String get architecture => modelArchitecture;
+  String get modelArchitecture => defaultArchitecture;
+  String get architecture => defaultArchitecture;
 
   // Embedded quantized INT8 acoustic projection weight matrix for clinical domain tokens
   static final Int8List _quantizedAcousticWeights = _generateQuantizedWeights();
