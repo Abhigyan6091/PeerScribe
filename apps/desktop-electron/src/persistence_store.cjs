@@ -110,7 +110,24 @@ class TacticalStorageEngine {
     }, null, 2);
 
     fs.writeFileSync(tmpFile, payload, 'utf8');
-    fs.renameSync(tmpFile, this.outboxFile);
+    try {
+      fs.renameSync(tmpFile, this.outboxFile);
+    } catch (err) {
+      if (err.code === 'EPERM' || err.code === 'EBUSY') {
+        // Handle Windows transient file locks / OneDrive sync hooks
+        try {
+          if (fs.existsSync(this.outboxFile)) {
+            fs.unlinkSync(this.outboxFile);
+          }
+          fs.renameSync(tmpFile, this.outboxFile);
+        } catch {
+          fs.copyFileSync(tmpFile, this.outboxFile);
+          try { fs.unlinkSync(tmpFile); } catch (_) {}
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**

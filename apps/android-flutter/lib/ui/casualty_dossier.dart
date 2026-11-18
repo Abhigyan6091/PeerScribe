@@ -544,6 +544,230 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
     }
   }
 
+Future<void> _recordMedication(String drug, String dosage, String route) async {
+    final db = DatabaseHelper();
+    final allEvents = await db.getAllEvents();
+    final op = await db.getActiveOperation();
+
+    final roleStr = widget.currentRole == ResponderRole.medicalResponder ? 'MEDICAL_RESPONDER' : widget.currentRole.name.toUpperCase();
+    final event = PeerScribeEvent(
+      eventId: 'evt_med_${const Uuid().v4()}',
+      operationId: op['operation_id']?.toString() ?? 'OP_TACTICAL',
+      entityId: widget.patientId,
+      eventType: 'MEDICATION_RECORDED',
+      actorId: 'medic_mobile_${widget.currentRole.name}',
+      actorRole: roleStr,
+      actorSequence: allEvents.length + 1,
+      lamportTimestamp: allEvents.length + 1,
+      occurredAtUtc: DateTime.now().toUtc().toIso8601String(),
+      payload: {
+        'drug_name': drug,
+        'dosage': dosage,
+        'route': route,
+        'medic_role': roleStr,
+      },
+    );
+
+    await db.insertEvent(event);
+    await _loadPatientData();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('💊 Administered $drug ($dosage $route) recorded and queued for mesh sync!'),
+          backgroundColor: TacticalTheme.triageGreen,
+        ),
+      );
+    }
+  }
+
+  void _showAdministerMedicationDialog() {
+    if (widget.currentRole != ResponderRole.medicalResponder && widget.currentRole != ResponderRole.coordinator) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⛔ Role ${widget.currentRole.name.toUpperCase()} lacks ADMINISTER_MEDICATION capability.'),
+          backgroundColor: TacticalTheme.triageRed,
+        ),
+      );
+      return;
+    }
+
+    final drugController = TextEditingController();
+    final dosageController = TextEditingController(text: '10mg');
+    String route = 'IV';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: TacticalTheme.surface,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.medication, color: TacticalTheme.primary),
+                      SizedBox(width: 8),
+                      Text(
+                        'ADMINISTER MEDICATION (RBAC AUTHORIZED)',
+                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Record administered drug, dosage, and route. Validated against documented patient allergies.',
+                    style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: drugController,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Drug Name',
+                      labelStyle: const TextStyle(color: TacticalTheme.textSecondary),
+                      hintText: 'e.g. Morphine, Epinephrine, Ceftriaxone',
+                      hintStyle: const TextStyle(color: TacticalTheme.textMuted),
+                      filled: true,
+                      fillColor: TacticalTheme.surfaceVariant,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: dosageController,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          decoration: InputDecoration(
+                            labelText: 'Dosage',
+                            labelStyle: const TextStyle(color: TacticalTheme.textSecondary),
+                            hintText: 'e.g. 10mg, 1g, 0.3mg',
+                            filled: true,
+                            fillColor: TacticalTheme.surfaceVariant,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      DropdownButton<String>(
+                        value: route,
+                        dropdownColor: TacticalTheme.surfaceVariant,
+                        style: const TextStyle(color: Colors.white),
+                        items: ['IV', 'IM', 'PO', 'SC', 'IO', 'Inhalation'].map((r) {
+                          return DropdownMenuItem(value: r, child: Text(r));
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) setModalState(() => route = v);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('RAPID TACTICAL PRESETS:', style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Morphine 10mg IV', style: TextStyle(color: TacticalTheme.primary, fontSize: 11)),
+                        onPressed: () {
+                          drugController.text = 'Morphine Sulfate';
+                          dosageController.text = '10mg';
+                          setModalState(() => route = 'IV');
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Epinephrine 0.3mg IM', style: TextStyle(color: TacticalTheme.primary, fontSize: 11)),
+                        onPressed: () {
+                          drugController.text = 'Epinephrine';
+                          dosageController.text = '0.3mg';
+                          setModalState(() => route = 'IM');
+                        },
+                      ),
+                      ActionChip(
+                        backgroundColor: TacticalTheme.surfaceVariant,
+                        label: const Text('Ceftriaxone 1g IV', style: TextStyle(color: TacticalTheme.primary, fontSize: 11)),
+                        onPressed: () {
+                          drugController.text = 'Ceftriaxone';
+                          dosageController.text = '1g';
+                          setModalState(() => route = 'IV');
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: TacticalTheme.primary,
+                      foregroundColor: Colors.black,
+                      minimumSize: const Size(double.infinity, 44),
+                    ),
+                    onPressed: () async {
+                      final drug = drugController.text.trim();
+                      final dosage = dosageController.text.trim();
+                      if (drug.isEmpty) return;
+
+                      // Pre-check for allergy collision
+                      final allergies = _patient?.knownAllergies ?? [];
+                      String? collidingAllergy;
+                      for (final a in allergies) {
+                        if (drug.toLowerCase().contains(a.toLowerCase()) || a.toLowerCase().contains(drug.toLowerCase())) {
+                          collidingAllergy = a;
+                          break;
+                        }
+                      }
+
+                      if (collidingAllergy != null) {
+                        final confirmOverride = await showDialog<bool>(
+                          context: context,
+                          builder: (c) => AlertDialog(
+                            backgroundColor: TacticalTheme.surface,
+                            title: const Text('🚨 CRITICAL ALLERGY CONFLICT', style: TextStyle(color: TacticalTheme.triageRed)),
+                            content: Text(
+                              'Patient has documented allergy to $collidingAllergy! Administering $drug poses FATAL RISK.\n\nDo you want to force override and administer?',
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('CANCEL')),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: TacticalTheme.triageRed),
+                                onPressed: () => Navigator.pop(c, true),
+                                child: const Text('FORCE OVERRIDE', style: TextStyle(color: Colors.white)),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmOverride != true) return;
+                      }
+
+                      Navigator.pop(ctx);
+                      await _recordMedication(drug, dosage, route);
+                    },
+                    child: const Text('CONFIRM MEDICATION ADMINISTRATION', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showStartTriageDialog() {
     if (widget.currentRole == ResponderRole.participant) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -768,6 +992,17 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                             foregroundColor: TacticalTheme.primary,
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           ),
+                          onPressed: _showAdministerMedicationDialog,
+                          icon: const Icon(Icons.medication_outlined, size: 15),
+                          label: const Text('MEDS', style: TextStyle(fontSize: 11)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: TacticalTheme.surfaceVariant,
+                            foregroundColor: TacticalTheme.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
                           onPressed: _showAttachPhotoDialog,
                           icon: const Icon(Icons.camera_alt, size: 15),
                           label: const Text('PHOTO/WOUND', style: TextStyle(fontSize: 11)),
@@ -889,6 +1124,55 @@ class _CasualtyDossierScreenState extends State<CasualtyDossierScreen> {
                                 ),
                               ),
                             ],
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Administered Medications Card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('ADMINISTERED MEDICATIONS',
+                            style: TextStyle(color: TacticalTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.bold)),
+                        TextButton.icon(
+                          onPressed: _showAdministerMedicationDialog,
+                          icon: const Icon(Icons.add, size: 14, color: TacticalTheme.primary),
+                          label: const Text('ADMINISTER', style: TextStyle(fontSize: 11, color: TacticalTheme.primary)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (p.medications.isEmpty)
+                      const Text('No medications administered yet.', style: TextStyle(color: TacticalTheme.textMuted, fontSize: 13))
+                    else
+                      ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: p.medications.length,
+                        separatorBuilder: (_, __) => const Divider(color: TacticalTheme.border),
+                        itemBuilder: (context, idx) {
+                          final med = p.medications[idx];
+                          final drug = med['drug_name']?.toString() ?? 'Medication';
+                          final dosage = med['dosage']?.toString() ?? '';
+                          final route = med['route']?.toString() ?? 'IV';
+                          final time = med['timestamp']?.toString() ?? '';
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.medication, color: TacticalTheme.primary),
+                            title: Text('$drug $dosage ($route)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                            subtitle: Text(time, style: const TextStyle(color: TacticalTheme.textMuted, fontSize: 10)),
                           );
                         },
                       ),
